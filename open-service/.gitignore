@@ -1,0 +1,6 @@
+server.local.json
+connection*.json
+*.pem
+*.key
+.env
+__pycache__/

@@ -1,0 +1,42 @@
+# Local project mirror and unsanitized research / emulator evidence
+/AGENTS.md
+/sources/
+/outputs/
+
+# Toolchains, IDE state and generated binaries
+**/.gradle/
+**/.kotlin/
+**/build/
+**/local.properties
+**/.idea/
+**/.DS_Store
+**/node_modules/
+**/__pycache__/
+**/.venv/
+*.pyc
+*.apk
+*.aab
+*.log
+
+# Device state, client parameters, signing material and account data
+**/quark_cli_client.json
+**/server.local.json
+**/connection*.json
+**/pending.json
+**/result.json
+**/manual-result.json
+**/.env
+**/.env.*
+*.jks
+*.keystore
+*.pem
+*.key
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# The public examples contain empty placeholders only.
+!**/*.example.json
+!**/.env.example

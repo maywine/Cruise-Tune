@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="18 18 72 72"><defs>
+ <linearGradient id="bg" gradientUnits="userSpaceOnUse" x1="12" y1="0" x2="87" y2="108"><stop stop-color="#293239"/><stop offset="1" stop-color="#10151A"/></linearGradient>
+ <linearGradient id="ring" gradientUnits="userSpaceOnUse" x1="27" y1="29" x2="71" y2="81"><stop stop-color="#F0D6A6"/><stop offset="1" stop-color="#B78B4F"/></linearGradient>
+ <linearGradient id="play" gradientUnits="userSpaceOnUse" x1="49" y1="40" x2="72" y2="68"><stop stop-color="#FFF0D4"/><stop offset="1" stop-color="#E0BA7C"/></linearGradient>
+ </defs><defs><clipPath id="mask"><rect x="18" y="18" width="72" height="72" rx="16"/></clipPath></defs><g clip-path="url(#mask)"><rect width="108" height="108" fill="url(#bg)"/><g transform="translate(4 0)"><path d="M69.678,36.322 A25,25 0,1 0,69.678,71.678" fill="none" stroke="url(#ring)" stroke-width="8" stroke-linecap="round"/><path d="M49,42.8 C49,40.9 51.05,39.72 52.7,40.67 L72.1,51.87 C73.73,52.81 73.73,55.19 72.1,56.13 L52.7,67.33 C51.05,68.28 49,67.1 49,65.2 Z" fill="url(#play)"/></g></g></svg>

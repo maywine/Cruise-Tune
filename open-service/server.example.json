@@ -1,0 +1,11 @@
+{
+  "approvedForAndroid": false,
+  "refreshRouteConfirmed": false,
+  "clientId": "",
+  "clientSecret": "",
+  "signKey": "",
+  "deviceId": "",
+  "serviceToken": "",
+  "externalServiceUrl": "https://your-own-service.example/",
+  "scope": "clouddrive.base`clouddrive.netdisk"
+}
