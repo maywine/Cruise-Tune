@@ -2,7 +2,7 @@
 
 ## 目标与兼容
 
-面向领克 01、LYNK OS N 2.0.0、高通 8155 ARM 等可手动安装 APK 的定制 Android 车机。芯片支持 64 位，不代表厂商系统一定开放 64 位进程；实际 ABI 和 SDK_INT 仍需设备读取。
+面向高通 8155 ARM 等可手动安装 APK 的定制 Android 车机。芯片支持 64 位，不代表厂商系统一定开放 64 位进程；实际 ABI 和 SDK_INT 仍需设备读取。
 
 初期参考 Apple Music 4.6.0（1353）进行 APK 核验：对应样本声明 minSdk 23、targetSdk 33，并包含 ARM 32／64 位原生库。因此项目以 API 23 作为最低兼容基线，而不是推断车机运行 Android 13。原始第三方 APK、照片和本机解析记录未收录到仓库。当前项目实际设置以 [构建文件](../android-app/app/build.gradle.kts) 为准。
 
