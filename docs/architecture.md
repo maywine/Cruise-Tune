@@ -31,6 +31,16 @@ flowchart LR
 
 打开应用先恢复信息与位置，默认等待用户继续。熄屏时清除播放意图，即使开启自动续播，下一次亮屏也不会自行恢复。进程结束与物理断电不同，不能把模拟器采样差当作最大断电误差保证。依据：[Android 生命周期](https://developer.android.com/guide/components/activities/activity-lifecycle)、[SQLite synchronous](https://www.sqlite.org/pragma.html#pragma_synchronous)、[Media3 后台播放](https://developer.android.com/media/media3/session/background-playback)。
 
+## 数据保留与清理（0.5.3）
+
+播放快照固定保留最新和上一份两条记录；队列只保留快照引用的版本。位置更新使备用快照转向同一队列后，旧队列会及时清除，不再等下一次换队列。
+
+完成目录扫描及加载曲库时，分批清理 `present=0` 且无引用的歌曲。当前／备用队列、离线下载请求及仍在界面显示的曲目暂时保留；刷新窗口中的上一份界面数据会在后续维护时释放。离线引用读取失败时先保留数据，之后成功读取再清理。失败的扫描仍会回滚，不把临时网络失败当成空目录。
+
+清理按 256 条候选 ID 分批处理，避免大规模历史数据占满内存或超过 SQL 参数数目限制。旧数据库不需要重建，也不删除账号、播放快照或音频缓存。SQLite 已释放的数据页供以后复用，数据库主文件不保证立刻缩小；不在播放过程中自动执行整库 VACUUM。
+
+写连接显式设置每 256 页自动 checkpoint，以及 WAL 重置后保留 1 MiB 的目标；写入提交之后最多每分钟额外尝试一次 PASSIVE checkpoint。它不会等待读写事务结束，也不会手动删除日志文件。FULL 同步保持不变。活跃长事务或大批量写入期间日志仍可能超过该目标，因此这不是运行中 WAL 的绝对硬上限。依据：[SQLite checkpoint 与 journal_size_limit](https://www.sqlite.org/pragma.html#pragma_journal_size_limit)。
+
 ## 缓存与网络
 
 优先完整离线文件，其次磁盘缓存，最后解析网盘地址读取缺失字节。完整离线任务与可淘汰的流式缓存分开管理。

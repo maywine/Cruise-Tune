@@ -22,7 +22,18 @@ class CruiseApplication : Application() {
     val streamHttp by lazy { http.newBuilder().callTimeout(0, TimeUnit.MILLISECONDS).addNetworkInterceptor(com.cruisetune.player.playback.RangeValidationInterceptor()).build() }
     private val brokerHttp by lazy { OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(25, TimeUnit.SECONDS).callTimeout(45, TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build() }
     val openConnections by lazy { com.cruisetune.player.data.open.OpenConnections(this, vault, http, brokerHttp) }
-    val library by lazy { LibraryRepository(this, database, vault, http, openConnections) }
+    val mediaDatabase by lazy { androidx.media3.database.StandaloneDatabaseProvider(this) }
+    val offlineIndex by lazy { androidx.media3.exoplayer.offline.DefaultDownloadIndex(mediaDatabase) }
+    val library by lazy { LibraryRepository(this, database, vault, http, openConnections, ::offlineTrackIds) }
+    private fun offlineTrackIds(): Set<String> = offlineIndex.getDownloads().use { cursor ->
+        buildSet {
+            while (cursor.moveToNext()) {
+                val uri = cursor.download.request.uri
+                check(uri.scheme == "cruisetune" && uri.host == "track")
+                add(requireNotNull(uri.lastPathSegment))
+            }
+        }
+    }
     val preferences by lazy { getSharedPreferences("preferences", MODE_PRIVATE) }
     val media by lazy { MediaCache(this) }
     override fun onCreate() {

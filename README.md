@@ -44,6 +44,7 @@ cp android-app/config/quark_cli_client.example.json \
 
 ## 文档与目录
 
+- [更新记录](CHANGELOG.md)
 - [环境依据与架构设计](docs/architecture.md)
 - [夸克接入与配置](docs/quark-integration.md)
 - [测试记录与实车验收边界](android-app/TESTING.md)

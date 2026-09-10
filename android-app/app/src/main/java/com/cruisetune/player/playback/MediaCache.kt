@@ -9,7 +9,6 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.*
 import androidx.media3.datasource.cache.*
 import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -28,7 +27,7 @@ import java.util.concurrent.Executors
 
 @UnstableApi
 class MediaCache(private val app: CruiseApplication) {
-    private val databaseProvider = StandaloneDatabaseProvider(app)
+    private val databaseProvider = app.mediaDatabase
     private val stat get() = StatFs(app.filesDir.absolutePath)
     val reserveBytes get() = maxOf(1024L * 1024 * 1024, stat.totalBytes / 10)
     val hasRoom get() = stat.availableBytes > reserveBytes
@@ -44,7 +43,8 @@ class MediaCache(private val app: CruiseApplication) {
     val playbackFactory: CacheDataSource.Factory = CacheDataSource.Factory().setCache(offline)
         .setCacheWriteDataSinkFactory(null).setUpstreamDataSourceFactory(streamFactory)
         .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
-    val downloadManager = DownloadManager(app, databaseProvider, offline, network, Executors.newFixedThreadPool(2)).apply {
+    val downloadManager = DownloadManager(app, app.offlineIndex,
+        DefaultDownloaderFactory(CacheDataSource.Factory().setCache(offline).setUpstreamDataSourceFactory(network), Executors.newFixedThreadPool(2))).apply {
         maxParallelDownloads = 1
         minRetryCount = 2
     }

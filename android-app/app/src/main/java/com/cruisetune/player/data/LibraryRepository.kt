@@ -15,7 +15,8 @@ import java.util.ArrayDeque
 
 data class LibraryState(val sources: List<MusicSource> = emptyList(), val tracks: List<Track> = emptyList(), val scanning: String? = null, val scannedCount: Int = 0, val message: String? = null)
 
-class LibraryRepository(private val context: Context, val database: LibraryDatabase, val vault: CredentialVault, val client: OkHttpClient, private val openConnections: com.cruisetune.player.data.open.OpenConnections) {
+class LibraryRepository(private val context: Context, val database: LibraryDatabase, val vault: CredentialVault, val client: OkHttpClient, private val openConnections: com.cruisetune.player.data.open.OpenConnections,
+    private val retainedTrackIds: () -> Set<String> = { emptySet() }) {
     private val stateMutable = MutableStateFlow(LibraryState())
     val state = stateMutable.asStateFlow()
     private val scanLock = Mutex()
@@ -26,6 +27,7 @@ class LibraryRepository(private val context: Context, val database: LibraryDatab
         SourceKind.LOCAL -> throw IllegalArgumentException("Local folders use the document provider")
     }
     suspend fun reload(message: String? = null) = withContext(Dispatchers.IO) {
+        retentionSnapshot()?.let { database.pruneMissingTracks(it) }
         stateMutable.value = stateMutable.value.copy(sources = database.sources(), tracks = database.tracks(), message = message)
     }
     suspend fun addAndScan(source: MusicSource) {
@@ -39,7 +41,7 @@ class LibraryRepository(private val context: Context, val database: LibraryDatab
             val tracks = withContext(Dispatchers.IO) {
                 if (source.kind != SourceKind.LOCAL) scanQuark(source) else scanLocal(source)
             }
-            withContext(Dispatchers.IO) { database.replaceScan(source.id, tracks) }
+            withContext(Dispatchers.IO) { database.replaceScan(source.id, tracks, retentionSnapshot()) }
             reload("已更新 ${tracks.size} 首音乐")
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) { reload(readableError(e)) }
@@ -102,6 +104,13 @@ class LibraryRepository(private val context: Context, val database: LibraryDatab
         return tracks
     }
     private fun checkTrackLimit(count: Int) { if (count > 100000) throw UserError("歌曲数量过多，请选择更小的目录") }
+    private fun retentionSnapshot(): Set<String>? = try {
+        // A visible row can still be tapped while scan results are being committed. Keep that
+        // display generation until a later maintenance pass sees the replacement library.
+        retainedTrackIds() + stateMutable.value.tracks.map { it.id }
+    }
+        catch (e: CancellationException) { throw e }
+        catch (_: Exception) { null } // If offline references cannot be read, preserve old metadata.
     fun findTrack(id: String) = database.findTrack(id)
     suspend fun readRequest(track: Track): ReadRequest {
         if (track.localUri.isNotBlank()) return ReadRequest(track.localUri, emptyMap())
