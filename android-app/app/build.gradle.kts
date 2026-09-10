@@ -1,17 +1,36 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
 
+val appVersion = Properties().apply {
+    rootProject.file("version.properties").inputStream().use { load(it) }
+}
+val appVersionName = appVersion.getProperty("VERSION_NAME")
+    ?: error("VERSION_NAME is required in version.properties")
+val appVersionCode = appVersion.getProperty("VERSION_CODE")?.toIntOrNull()
+    ?: error("VERSION_CODE must be an integer in version.properties")
+require(appVersionCode in 1..2100000000) { "VERSION_CODE is outside the Android range" }
+
+val releaseSigning = listOf("CRUISE_KEYSTORE_PATH", "CRUISE_STORE_PASSWORD", "CRUISE_KEY_ALIAS", "CRUISE_KEY_PASSWORD")
+    .associateWith { providers.environmentVariable(it).orNull }
+val hasReleaseSigning = releaseSigning.values.any { !it.isNullOrEmpty() }
+if (hasReleaseSigning) require(releaseSigning.values.all { !it.isNullOrEmpty() }) {
+    "All CRUISE release signing environment variables must be supplied together"
+}
+
 android {
     namespace = "com.cruisetune.player"
     compileSdk = 36
+    buildToolsVersion = "35.0.0"
     defaultConfig {
         applicationId = "com.cruisetune.player"
         minSdk = 23
         targetSdk = 35
-        versionCode = 11
-        versionName = "0.5.2"
+        versionCode = appVersionCode
+        versionName = appVersionName
         manifestPlaceholders["appLabel"] = "Cruise Tune"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
@@ -20,8 +39,19 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    signingConfigs {
+        if (hasReleaseSigning) create("ciRelease") {
+            storeFile = file(releaseSigning.getValue("CRUISE_KEYSTORE_PATH")!!)
+            storePassword = releaseSigning.getValue("CRUISE_STORE_PASSWORD")
+            keyAlias = releaseSigning.getValue("CRUISE_KEY_ALIAS")
+            keyPassword = releaseSigning.getValue("CRUISE_KEY_PASSWORD")
+        }
+    }
     buildTypes {
-        release { isMinifyEnabled = false }
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("ciRelease")
+        }
         create("authCheck") {
             initWith(getByName("debug"))
             applicationIdSuffix = ".authcheck"

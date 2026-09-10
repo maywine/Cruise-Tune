@@ -14,7 +14,7 @@
 - Android 系统熄屏或主显示屏关闭时暂停并保存进度，亮屏不自动恢复播放。
 - 横竖屏布局、日／夜模式、对比度及减少动态效果选项。
 
-当前版本 **0.5.2**。最低 API 23，编译 SDK 36，目标 SDK 35。使用 Kotlin、Android Views、Media3、OkHttp、SQLite 与 Android Keystore，不依赖 Google Play 服务。目标环境为可安装普通 APK 的厂商定制 Android 车机；不假定它一定是标准 Android Automotive OS。
+应用版本由 [version.properties](android-app/version.properties) 统一维护。最低 API 23，编译 SDK 36，目标 SDK 35。使用 Kotlin、Android Views、Media3、OkHttp、SQLite 与 Android Keystore，不依赖 Google Play 服务。目标环境为可安装普通 APK 的厂商定制 Android 车机；不假定它一定是标准 Android Automotive OS。
 
 ## 构建
 
@@ -50,6 +50,7 @@ cp android-app/config/quark_cli_client.example.json \
 - [界面与图标设计](docs/design.md)
 - [第三方参考与许可](android-app/THIRD_PARTY_NOTICES.md)
 - [提交与脱敏检查](docs/publishing.md)
+- [创建版本标签后自动发布 Release](docs/releases.md)
 - `android-app/`：应用、资源与自动化测试。
 - `tools/`：构建辅助、图标资源生成和本地授权实验脚本。
 - `open-service/`：早期连接服务方案，仅作为研发参考；当前应用没有其配置入口。

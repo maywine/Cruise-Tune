@@ -28,7 +28,7 @@ def main():
     paths = [p.decode() for p in git('ls-files', '-z').split(b'\0') if p]
     forbidden_names = {'local.properties', 'quark_cli_client.json', 'server.local.json',
                        'pending.json', 'result.json', 'manual-result.json', '.DS_Store'}
-    private_dirs = {'sources', 'outputs', '.gradle', '.kotlin', 'build', '.venv', 'node_modules', '__pycache__'}
+    private_dirs = {'sources', 'outputs', 'dist', '.gradle', '.kotlin', 'build', '.venv', 'node_modules', '__pycache__'}
     patterns = {
         'private key': re.compile(rb'-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----'),
         'GitHub credential': re.compile(rb'\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})\b'),

@@ -2,6 +2,7 @@
 /AGENTS.md
 /sources/
 /outputs/
+/dist/
 
 # Toolchains, IDE state and generated binaries
 **/.gradle/
