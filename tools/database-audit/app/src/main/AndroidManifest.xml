@@ -1,0 +1,4 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:label="Cruise Tune Database Audit" android:allowBackup="false" />
+    <instrumentation android:name=".AuditInstrumentation" android:targetPackage="com.cruisetune.player" android:label="Isolated database audit" android:functionalTest="true" />
+</manifest>
