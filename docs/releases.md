@@ -98,4 +98,4 @@ cd android-app
 
 2026-09-10：工作流通过 actionlint 与 shell 语法检查；14 项发布工具测试通过，覆盖版本与标签不一致、内部版本号未递增、密钥缺失、误换证书、成品篡改、草稿恢复及拒绝覆盖已公开／非本流程附件。隔离副本完成 81 项 Android 测试、release Lint、使用既有证书的非 debuggable 签名构建，以及 APK／版本清单／校验文件复核。临时签名文件和客户端 JSON 已清理。
 
-没有创建远程标签或测试 Release；GitHub 云端运行及 Secrets 配置需要有效的仓库 API 授权。本地 SSH 推送权限不代表已具备该授权。
+仓库所需的 5 项发布 Secrets 已配置，GitHub Actions 已启用，发布工作流状态为 active。尚未创建远程标签或实际 Release，云端完整发布运行仍待首次推送版本标签验证。私钥及客户端参数通过 Secrets 保存，没有进入源码提交。
