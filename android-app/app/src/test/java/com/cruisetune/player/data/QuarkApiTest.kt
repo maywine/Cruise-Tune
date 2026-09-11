@@ -60,6 +60,28 @@ class QuarkApiTest {
         assertEquals(cookie, second.headers["Cookie"])
         repeat(2) { assertEquals("song", JSONObject(server.takeRequest().body.readUtf8()).getJSONArray("fids").getString(0)) }
     }
+    @Test fun webAudioUsesVerifiedPcProfileAndPassesRotatedCookieToRangeReader() = runBlocking {
+        server.enqueue(MockResponse().setBody(page(emptyList(), 0)))
+        server.enqueue(MockResponse().setHeader("Set-Cookie", "__puus=pc-session; Path=/").setBody(
+            """{"status":200,"code":0,"data":[{"fid":"large-flac","download_url":"https://pdds.quark.cn/audio.flac"}]}"""))
+        api.listChildren("0")
+        val read = api.resolve("large-flac")
+        assertEquals(QuarkApi.USER_AGENT, server.takeRequest().getHeader("User-Agent"))
+        val download = server.takeRequest()
+        assertEquals("/1/clouddrive/file/download", download.requestUrl!!.encodedPath)
+        assertEquals("win32", download.requestUrl!!.queryParameter("sys"))
+        assertEquals(QuarkApi.PC_CLIENT_VERSION, download.requestUrl!!.queryParameter("ve"))
+        assertEquals(QuarkApi.PC_DOWNLOAD_USER_AGENT, download.getHeader("User-Agent"))
+        assertEquals(QuarkApi.PC_DOWNLOAD_USER_AGENT, read.headers["User-Agent"])
+        assertTrue(read.headers.getValue("Cookie").contains("__puus=pc-session"))
+    }
+    @Test fun remainingSizeRestrictionIsNotMisreportedAsNetworkOrLoginFailure() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(400).setBody("""{"status":400,"code":23018,"message":"private diagnostic details"}"""))
+        val error = runCatching { api.resolve("large-flac") }.exceptionOrNull() as UserError
+        assertEquals("夸克限制了该文件下载，请检查网盘下载权限", error.message)
+        assertFalse(error.retryable); assertFalse(error.needsLogin)
+        assertEquals(1, server.requestCount)
+    }
     @Test fun downloadCredentialsNeverGoToUnexpectedHost() = runBlocking {
         server.enqueue(MockResponse().setBody("""{"code":0,"data":[{"download_url":"https://quark.cn.attacker.example/song"}]}"""))
         assertTrue(runCatching { api.resolve("song") }.exceptionOrNull() is UserError)

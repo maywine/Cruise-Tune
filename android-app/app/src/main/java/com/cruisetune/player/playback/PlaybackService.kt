@@ -18,6 +18,8 @@ import com.google.common.util.concurrent.SettableFuture
 import com.google.common.util.concurrent.Futures
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 @UnstableApi
 class PlaybackService : MediaLibraryService() {
@@ -26,11 +28,18 @@ class PlaybackService : MediaLibraryService() {
         const val SHUFFLE = "cruise.shuffle"
         const val RESUME_ON_OPEN = "cruise.resume_open"
         const val RETRY = "cruise.retry"
+        const val REMOVE_SOURCE = "cruise.remove_source"
+        const val DISCONNECT_TOKEN = "cruise.disconnect_token"
     }
     private val app get() = application as CruiseApplication
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val diskScope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
-    private val writes = Channel<Pair<Boolean, PlaybackSnapshot>>(Channel.UNLIMITED)
+    private data class DiskWrite(val action: suspend () -> Unit, val completed: CompletableDeferred<Unit>? = null)
+    private val writes = Channel<DiskWrite>(Channel.UNLIMITED)
+    private val commandLock = Mutex()
+    private fun save(snapshot: PlaybackSnapshot, queue: Boolean = false) {
+        writes.trySend(DiskWrite({ if (queue) app.database.saveQueue(snapshot) else app.database.savePosition(snapshot) }))
+    }
     private lateinit var player: ExoPlayer
     private lateinit var session: MediaLibrarySession
     private var entries = emptyList<QueueEntry>()
@@ -63,10 +72,11 @@ class PlaybackService : MediaLibraryService() {
         session = MediaLibrarySession.Builder(this, player, Callbacks()).setSessionActivity(activity).build()
         screenOff = ScreenOffMonitor(this, ::pauseForScreenOff)
         diskScope.launch {
-            for ((queue, snapshot) in writes) {
+            for (write in writes) {
                 try {
-                    if (queue) app.database.saveQueue(snapshot) else app.database.savePosition(snapshot)
-                } catch (_: Exception) {
+                    write.action(); write.completed?.complete(Unit)
+                } catch (e: Exception) {
+                    write.completed?.completeExceptionally(e)
                     withContext(Dispatchers.Main) { updateExtras("播放位置暂时无法保存，请检查存储空间") }
                 }
             }
@@ -134,9 +144,9 @@ class PlaybackService : MediaLibraryService() {
         player.prepare(); player.play()
     }
     private fun snapshot() = PlaybackSnapshot(revision, entries, player.currentMediaItemIndex.coerceAtLeast(0), if (player.playbackState == Player.STATE_ENDED) 0 else player.currentPosition.coerceAtLeast(0), persistedIntent, player.repeatMode, shuffled)
-    private fun persist() { if (entries.isNotEmpty()) writes.trySend(false to snapshot()) }
+    private fun persist() { if (!applying && entries.isNotEmpty()) save(snapshot()) }
     private fun updateExtras(error: String? = null) {
-        session.setSessionExtras(Bundle().apply { putBoolean("shuffled", shuffled); if (packageName.endsWith(".authcheck")) putString("prefetchGate", prefetchGate); (capacityMessage ?: prefetchMessage)?.let { putString("prefetchStatus", it) };
+        session.setSessionExtras(Bundle().apply { putBoolean("shuffled", shuffled); putBoolean("needsLogin", userError(player.playerError)?.needsLogin == true); if (packageName.endsWith(".authcheck")) putString("prefetchGate", prefetchGate); (capacityMessage ?: prefetchMessage)?.let { putString("prefetchStatus", it) };
             (error ?: player.playerError?.let { readableError(it.cause ?: it) })?.let { putString("error", it) } })
     }
     private suspend fun playTrack(id: String, sourceId: String?) {
@@ -151,10 +161,35 @@ class PlaybackService : MediaLibraryService() {
         entries = tracks.mapIndexed { i, t -> QueueEntry(t, i) }
         revision = maxOf(revision + 1, System.currentTimeMillis())
         shuffled = false; persistedIntent = true
-        writes.trySend(true to PlaybackSnapshot(revision, entries, index, 0, true, player.repeatMode, false))
+        save(PlaybackSnapshot(revision, entries, index, 0, true, player.repeatMode, false), true)
         player.setMediaItems(tracks.map(app.media::mediaItem), index, 0)
         prepareAndPlay()
         applying = false; updateExtras(); cancelPrefetch()
+    }
+    private suspend fun removeSources(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        val before = snapshot()
+        val remaining = SourceRemoval.queue(before, ids, maxOf(revision + 1, System.currentTimeMillis()))
+        val removedIds = withContext(Dispatchers.IO) { app.database.trackIdsForSources(ids) } +
+            entries.filter { it.track.sourceId in ids }.map { it.track.id }
+        val offlineRequests = withContext(Dispatchers.IO) { app.offlineIndex.getDownloads().use { cursor ->
+            buildSet { while(cursor.moveToNext()) if(cursor.download.request.uri.lastPathSegment in removedIds) add(cursor.download.request.id) }
+        } }
+        applying = true
+        player.pause(); cancelPrefetch()
+        try {
+            val completion = CompletableDeferred<Unit>()
+            // Serialize removal after all earlier saves, preventing stale queued writes from reviving it.
+            writes.send(DiskWrite({ app.library.removeSources(ids, remaining) }, completion))
+            completion.await()
+            entries = remaining.entries; revision = remaining.revision; persistedIntent = remaining.playIntent
+            if (entries.isEmpty()) player.clearMediaItems()
+            else player.setMediaItems(entries.map { app.media.mediaItem(it.track) }, remaining.index, remaining.positionMs)
+            (offlineRequests + app.media.downloadManager.currentDownloads.filter { it.request.uri.lastPathSegment in removedIds }.map { it.request.id })
+                .forEach { app.media.downloadManager.removeDownload(it) }
+            if (remaining.playIntent) prepareAndPlay()
+            updateExtras("已移除本机音乐来源")
+        } finally { applying = false; persist() }
     }
     private suspend fun toggleShuffle() {
         ready.await()
@@ -164,7 +199,7 @@ class PlaybackService : MediaLibraryService() {
         val (ordered, index) = QueuePolicy.reorder(entries, player.currentMediaItem?.mediaId, !shuffled)
         applying = true
         entries = ordered; shuffled = !shuffled; revision = maxOf(revision + 1, System.currentTimeMillis())
-        writes.trySend(true to PlaybackSnapshot(revision, entries, index, position, persistedIntent, player.repeatMode, shuffled))
+        save(PlaybackSnapshot(revision, entries, index, position, persistedIntent, player.repeatMode, shuffled), true)
         player.setMediaItems(entries.map { app.media.mediaItem(it.track) }, index, position)
         player.prepare(); player.playWhenReady = playing
         applying = false; updateExtras(); cancelPrefetch()
@@ -214,22 +249,36 @@ class PlaybackService : MediaLibraryService() {
     private inner class Callbacks : MediaLibrarySession.Callback {
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
             val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
-            if (controller.packageName == packageName) listOf(PLAY_TRACK, SHUFFLE, RESUME_ON_OPEN, RETRY).forEach { commands.add(SessionCommand(it, Bundle.EMPTY)) }
+            if (controller.packageName == packageName) listOf(PLAY_TRACK, SHUFFLE, RESUME_ON_OPEN, RETRY, REMOVE_SOURCE, DISCONNECT_TOKEN).forEach { commands.add(SessionCommand(it, Bundle.EMPTY)) }
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session).setAvailableSessionCommands(commands.build())
                 .setAvailablePlayerCommands(Player.Commands.Builder().addAllCommands().remove(Player.COMMAND_CHANGE_MEDIA_ITEMS).build()).build()
         }
         override fun onCustomCommand(session: MediaSession, controller: MediaSession.ControllerInfo, customCommand: SessionCommand, args: Bundle): ListenableFuture<SessionResult> = future {
             ready.await()
+            commandLock.withLock {
             try {
                 when (customCommand.customAction) {
                     PLAY_TRACK -> playTrack(args.getString("trackId") ?: "", args.getString("sourceId"))
                     SHUFFLE -> toggleShuffle()
                     RESUME_ON_OPEN -> if (app.preferences.getBoolean("resumeOnOpen", false) && persistedIntent && entries.isNotEmpty()) { prepareAndPlay() }
+                    REMOVE_SOURCE -> removeSources(setOf(args.getString("sourceId") ?: throw UserError("请选择要移除的目录")))
+                    DISCONNECT_TOKEN -> {
+                        val account = args.getString("accountId") ?: throw UserError("请选择要移除的账号")
+                        val ids = withContext(Dispatchers.IO) { app.database.sources().filter { it.kind == SourceKind.QUARK_OPEN && it.accountId == account }.map { it.id }.toSet() }
+                        removeSources(ids)
+                        app.openConnections.sessions.disconnect(account)
+                        withContext(Dispatchers.IO) { app.database.forgetAccess(SourceKind.QUARK_OPEN, account) }
+                        if (app.preferences.getString("quarkDirectAccount",null) == account) withContext(Dispatchers.IO) {
+                            check(app.preferences.edit().remove("quarkDirectAccount").commit())
+                        }
+                        updateExtras("已清除本机 Token 授权")
+                    }
                     RETRY -> { cancelPrefetch(); updateExtras(); prepareAndPlay() }
                     else -> return@future SessionResult(SessionError.ERROR_NOT_SUPPORTED)
                 }
                 SessionResult(SessionResult.RESULT_SUCCESS)
             } catch (e: Exception) { updateExtras(readableError(e)); SessionResult(SessionError.ERROR_IO) }
+            }
         }
         override fun onPlaybackResumption(mediaSession: MediaSession, controller: MediaSession.ControllerInfo, isForPlayback: Boolean): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = future {
             ready.await()
@@ -255,6 +304,7 @@ class PlaybackService : MediaLibraryService() {
         }
         override fun onSetMediaItems(session: MediaSession, controller: MediaSession.ControllerInfo, mediaItems: MutableList<MediaItem>, startIndex: Int, startPositionMs: Long): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = future {
             ready.await()
+            commandLock.withLock {
             val requestedId = mediaItems.getOrNull(startIndex.coerceAtLeast(0))?.mediaId
             val tracks = withContext(Dispatchers.IO) {
                 val selected = mediaItems.mapNotNull { app.database.findTrack(it.mediaId) }
@@ -264,10 +314,11 @@ class PlaybackService : MediaLibraryService() {
             val position = startPositionMs.coerceAtLeast(0)
             if (tracks.isNotEmpty()) {
                 entries = tracks.mapIndexed { i, t -> QueueEntry(t, i) }; revision = maxOf(revision + 1, System.currentTimeMillis()); shuffled = false
-                writes.trySend(true to PlaybackSnapshot(revision, entries, index, position, persistedIntent, player.repeatMode))
+                save(PlaybackSnapshot(revision, entries, index, position, persistedIntent, player.repeatMode), true)
                 updateExtras(); cancelPrefetch()
             }
             MediaSession.MediaItemsWithStartPosition(tracks.map(app.media::mediaItem), index, position)
+            }
         }
         override fun onAddMediaItems(session: MediaSession, controller: MediaSession.ControllerInfo, mediaItems: MutableList<MediaItem>): ListenableFuture<MutableList<MediaItem>> = future {
             val tracks = withContext(Dispatchers.IO) { mediaItems.mapNotNull { app.database.findTrack(it.mediaId) } }

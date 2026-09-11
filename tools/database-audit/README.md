@@ -45,3 +45,27 @@ CRUISE_APK_SHA=11b081efdb4206ce6b30ce0a6fd64fd02fd3445748ade11e41d73ade42ff4ea5
 实体文件 3→2 与对应行删除；当前／备用队列保护及回退；600 次加速进度保存；外部保留引用释放；失败扫描回滚；20 轮替换扫描；人为保持读取事务期间写入 2500 条大记录，测量 WAL 峰值、写入耗时，以及读取释放后日志的复用。
 
 600 次保存是加速调用，不代表已经完成 20 分钟真实定时或实车长稳测试。保留引用用例向数据库提供受控 ID 集合，不等同于重新完成一次真实离线下载。WAL 测量区分“读事务仍占用”与“释放后继续写入”，不将回收目标当成运行中硬上限。
+
+## 未缓存网络读取诊断
+
+`NetworkAuditInstrumentation` 在同签名目标应用内调用其实际数据源，跳过媒体缓存读取前 64 KiB。必须传入目标 APK 的 `expectedApkSha`；可用 `trackTitleHint` 校验当前曲目，但不要将真实曲名写入公共报告。
+
+诊断仅输出固定 API 路径、已知服务域名、HTTP 状态、数值业务错误码和读取字节数，不输出凭证、完整 URL、响应正文或账号标识。`pcHost=true` 仅在内存中把旧网页 API 主机改为 PC 主机进行对照，不修改应用配置。请求可能触发应用正常的令牌刷新或 Cookie 更新。运行会终止目标进程，完成后需重新打开播放器，并卸载临时诊断组件。
+
+```text
+adb -s <serial> shell am instrument -w -r -e expectedApkSha <sha256> com.cruisetune.dbaudit/.NetworkAuditInstrumentation
+```
+
+只有 `report.success=true` 且 `bytesRead=65536` 才表示该次读取成功；Instrumentation 的完成码不代表网络成功。已缓存歌曲能播放，不能证明当前网盘凭证仍有效。
+
+## 用户授权的模拟器测试切换
+
+`TokenSetupInstrumentation` **会修改目标模拟器的真实应用数据**，不属于只读诊断，也不打入播放器。仅在用户明确要求移除该测试实例的网页登录状态时使用。先通过应用 Token 入口添加授权目录、建立并验证纯 Token 队列，再传 `confirmTokenSetup=true` 和精确的 `expectedApkSha` 执行。
+
+工具要求现有队列全部属于当前 Token 账号，随后清理旧网页登录来源、歌曲元数据及其旧快照，移除旧 Cookie 凭证（含旧 UUID 凭证槽）、网页账号入口和 WebView Cookie。Token 队列的顺序与位置保留，播放意图设为暂停。只输出计数和布尔状态，结束后卸载临时组件、正常重启播放器复验。不会删除网盘文件，也不会移除应用的网页登录实现。
+
+网络诊断可选 `desktopUa=true`：仅在内存中对 Token 的固定下载地址接口设置参考 PC 客户端 User-Agent，用于对照已知大小限制。不会切换账号、接口或认证方式，也不会保存该请求头设置。报告同时给出文件字节数；服务端错误文案只允许固定的 `download file size limit[数字]` 格式。
+
+`openListShape=true` 对 Token 的下载地址请求在内存中使用 OpenList QuarkOpen 的 UA、Accept 并省略 platform/device_id 查询参数，保留本应用 Token 与签名；用于局部协议格式对照，不代表完整 OpenList 部署测试。不会向 OpenList 的第三方续期服务发送凭证。
+
+`CacheCoverageInstrumentation` 读取已保存队列附近曲目的两层缓存覆盖范围，只报告队列序号、字节数和缺口；不打开网络数据源。可传 `titleHint` 定位用户指定曲目。使用 `clearHintStreamingCache=true` 会清理恰好一个明确匹配曲目的临时流缓存，且要求它没有离线缓存；只应在用户的缓存调试任务范围内使用，不能当作默认只读检查。工具运行会结束目标进程，不能用它还原进程结束前尚未提交的实时状态。

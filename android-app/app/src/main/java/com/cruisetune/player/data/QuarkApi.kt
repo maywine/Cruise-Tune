@@ -21,10 +21,12 @@ class QuarkApi(
     private val client: OkHttpClient,
     private val readCookie: () -> String?,
     private val saveCookie: (String) -> Unit,
-    private val base: HttpUrl = "https://drive.quark.cn/1/clouddrive/".toHttpUrl(),
+    private val base: HttpUrl = "https://drive-pc.quark.cn/1/clouddrive/".toHttpUrl(),
 ) : MusicProvider {
     companion object {
         const val USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        const val PC_CLIENT_VERSION = "2.5.56"
+        const val PC_DOWNLOAD_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) quark-cloud-drive/$PC_CLIENT_VERSION Chrome/100.0.4896.160 Electron/18.3.5.12-a038f7b798 Safari/537.36 Channel/pckk_other_ch"
         const val REFERER = "https://pan.quark.cn/"
         fun validCookie(cookie: String) = cookie.length in 10..32768 && !cookie.contains('\n') && !cookie.contains('\r') &&
             cookie.split(';').any { it.trim().startsWith("__puus=") || it.trim().startsWith("__pus=") || it.trim().startsWith("__kps=") }
@@ -70,24 +72,27 @@ class QuarkApi(
     }
 
     override suspend fun resolve(fileId: String): ReadRequest {
-        val json = request("file/download", body = JSONObject().put("fids", JSONArray().put(fileId)))
+        // Verified with a web-authorized FLAC above 50 MiB. Playback still reads only
+        // requested byte ranges; this does not change the OAuth/Token provider.
+        val json = request("file/download", query = mapOf("sys" to "win32", "ve" to PC_CLIENT_VERSION, "ut" to "", "guid" to ""),
+            body = JSONObject().put("fids", JSONArray().put(fileId)), userAgent = PC_DOWNLOAD_USER_AGENT)
         val data = json.optJSONArray("data") ?: throw UserError("暂时无法获取夸克文件地址")
         val match = (0 until data.length()).map { data.getJSONObject(it) }.firstOrNull { it.optString("fid", fileId) == fileId }
             ?: throw UserError("夸克文件已不可用")
         val url = match.optString("download_url").ifEmpty { throw UserError("夸克尚未提供可用下载地址") }.toHttpUrl()
         val trusted = listOf("quark.cn", "uc.cn", "ucweb.com").any { url.host == it || url.host.endsWith(".$it") }
         if (url.scheme != "https" || !trusted) throw UserError("夸克下载域名已变化，需要更新接入适配")
-        return ReadRequest(url.toString(), mapOf("Cookie" to cookie(), "Referer" to REFERER, "User-Agent" to USER_AGENT))
+        return ReadRequest(url.toString(), mapOf("Cookie" to cookie(), "Referer" to REFERER, "User-Agent" to PC_DOWNLOAD_USER_AGENT))
     }
 
     private fun cookie(): String = readCookie()?.takeIf { validCookie(it) } ?: throw UserError("夸克账号需重新连接", true)
 
-    private suspend fun request(path: String, query: Map<String, String> = emptyMap(), body: JSONObject? = null): JSONObject = withContext(Dispatchers.IO) {
+    private suspend fun request(path: String, query: Map<String, String> = emptyMap(), body: JSONObject? = null, userAgent: String = USER_AGENT): JSONObject = withContext(Dispatchers.IO) {
         val url = base.newBuilder().addPathSegments(path).addQueryParameter("pr", "ucpro").addQueryParameter("fr", "pc").apply {
             query.forEach { (key, value) -> addQueryParameter(key, value) }
         }.build()
         val builder = Request.Builder().url(url).header("Cookie", cookie()).header("Referer", REFERER)
-            .header("User-Agent", USER_AGENT).header("Accept", "application/json")
+            .header("User-Agent", userAgent).header("Accept", "application/json")
         if (body != null) builder.post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
         val transport = client.newBuilder().followRedirects(false).followSslRedirects(false).build()
         for (attempt in 0..2) {
@@ -103,13 +108,18 @@ class QuarkApi(
                         ?: waitMs
                     return@use null
                 }
-                if (!response.isSuccessful) throw UserError("夸克暂时无法连接，请稍后重试", retryable = response.code in listOf(408, 425) || response.code >= 500)
+                if (!response.isSuccessful) {
+                    val code = response.peekBody(8192).use { peek -> runCatching { JSONObject(peek.string()).optInt("code") }.getOrNull() }
+                    if (code == 23018) throw UserError("夸克限制了该文件下载，请检查网盘下载权限")
+                    throw UserError("夸克暂时无法连接，请稍后重试", retryable = response.code in listOf(408, 425) || response.code >= 500)
+                }
                 val updates = Cookie.parseAll(url, response.headers).map { it.name to it.value }
                 if (updates.isNotEmpty()) saveCookie(mergeCookies(cookie(), updates))
                 val raw = response.body?.string() ?: throw UserError("夸克返回了空数据")
                 val json = runCatching { JSONObject(raw) }.getOrElse { throw UserError("夸克响应格式已变化，请稍后重试") }
                 val status = json.optInt("status", 200)
                 if (status == 401 || status == 403) throw UserError("夸克账号需重新连接", true)
+                if (json.optInt("code", 0) == 23018) throw UserError("夸克限制了该文件下载，请检查网盘下载权限")
                 if (json.optInt("code", 0) != 0 || status >= 400) throw UserError("夸克未允许本次读取，请检查账号或文件权限")
                 json
             }

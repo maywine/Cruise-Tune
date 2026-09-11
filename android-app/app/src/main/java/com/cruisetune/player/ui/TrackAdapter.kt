@@ -25,6 +25,11 @@ class TrackAdapter(private val compact: Boolean = false, private val select: (Tr
         affected.forEach { notifyItemChanged(it) }
     }
     class Holder(val row: LinearLayout, val number: TextView, val title: TextView, val subtitle: TextView) : RecyclerView.ViewHolder(row)
+    override fun onCurrentListChanged(previousList: MutableList<Track>, currentList: MutableList<Track>) {
+        super.onCurrentListChanged(previousList, currentList)
+        // DiffUtil can move unchanged holders without rebinding their position-derived labels.
+        if (currentList.isNotEmpty()) notifyItemRangeChanged(0, currentList.size, "positions")
+    }
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
         val c = parent.context
         val row = LinearLayout(c).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; minimumHeight = c.dp(if (compact) 76 else 84); setPadding(c.dp(12), c.dp(if (compact) 8 else 12), c.dp(12), c.dp(if (compact) 8 else 12)); isClickable = true; isFocusable = true }

@@ -113,6 +113,30 @@ class OpenLayerTest {
             assertTrue(result.headers.getValue("Cookie").contains("server-new")); assertEquals("server-new", store.value!!.accessToken)
         } finally { server.shutdown() }
     }
+    @Test fun fileSizeRestrictionExplainsServerLimitWithoutRotatingOrRetrying() = runBlocking {
+        val server = MockWebServer(); server.start()
+        try {
+            server.enqueue(MockResponse().setResponseCode(400).setBody(
+                """{"status":-1,"errno":23018,"error_info":"download file size limit[52428800]"}"""))
+            val s = session(); val broker = Broker()
+            val api = QuarkOpenApi(s.accountId, OpenSessionManager(Store(s), broker), broker, OkHttpClient(), server.url("/"))
+            val error = runCatching { api.resolve("scope|song") }.exceptionOrNull() as UserError
+            assertEquals("文件超过夸克当前的下载上限（50 MiB）", error.message)
+            assertFalse(error.retryable); assertFalse(error.needsLogin)
+            assertEquals(0, broker.rotations.get()); assertEquals(1, server.requestCount)
+        } finally { server.shutdown() }
+    }
+    @Test fun unknownFileLimitMessageDoesNotExposeRawServiceText() = runBlocking {
+        val server = MockWebServer(); server.start()
+        try {
+            server.enqueue(MockResponse().setResponseCode(400).setBody(
+                """{"status":-1,"errno":23018,"error_info":"private signed URL or account details"}"""))
+            val s = session(); val b = Broker()
+            val error = runCatching { QuarkOpenApi(s.accountId, OpenSessionManager(Store(s), b), b, OkHttpClient(), server.url("/")).resolve("scope|song") }.exceptionOrNull() as UserError
+            assertEquals("夸克限制了该文件下载，请检查网盘下载权限", error.message)
+            assertFalse(error.retryable); assertFalse(error.needsLogin)
+        } finally { server.shutdown() }
+    }
     @Test fun malformedLastPageAndBadDownloadHostFailClosed() = runBlocking {
         val server = MockWebServer(); server.start()
         try {

@@ -23,6 +23,7 @@ object Design {
     var text = Color.rgb(245, 243, 238); private set
     var secondary = Color.rgb(179, 187, 190); private set
     var accent = Color.rgb(221, 187, 132); private set
+    var danger = Color.rgb(255, 139, 128); private set
     var light = false; private set
     var highContrast = false; private set
     var reduceTransparency = false; private set
@@ -35,6 +36,7 @@ object Design {
         text = Color.parseColor(if (light) "#161B20" else "#F5F3EE")
         secondary = if (contrast) text else Color.parseColor(if (light) "#565F65" else "#B3BBBE")
         accent = Color.parseColor(if (light) "#815815" else "#DDBB84")
+        danger = Color.parseColor(if (light) "#B42318" else "#FF8B80")
     }
     fun Context.dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     fun surface(color: Int, radius: Float = 24f, stroke: Int? = null) = GradientDrawable().apply {
@@ -52,14 +54,22 @@ object Design {
             isAppearanceLightNavigationBars = light && Build.VERSION.SDK_INT >= 26
         }
     }
-    fun styleDialog(dialog: AlertDialog, context: Context) {
+    fun styleDialog(dialog: AlertDialog, context: Context, destructive: Boolean = false) {
         dialog.window?.apply {
             setBackgroundDrawable(surface(panel, context.dp(28).toFloat()))
             setWindowAnimations(0)
             applySystemBars(this)
+            setLayout(minOf(context.dp(640),context.resources.displayMetrics.widthPixels-context.dp(32)),android.view.ViewGroup.LayoutParams.WRAP_CONTENT)
         }
+        dialog.findViewById<TextView>(android.R.id.message)?.apply {
+            textSize = 20f; setTextColor(Design.text); setLineSpacing(context.dp(5).toFloat(),1f)
+        }
+        dialog.findViewById<TextView>(androidx.appcompat.R.id.alertTitle)?.apply { textSize = 24f; setTextColor(Design.text) }
         for (which in listOf(AlertDialog.BUTTON_NEGATIVE, AlertDialog.BUTTON_POSITIVE, AlertDialog.BUTTON_NEUTRAL)) {
-            dialog.getButton(which)?.apply { minHeight = context.dp(64); textSize = 20f; setTextColor(accent) }
+            dialog.getButton(which)?.apply {
+                minHeight = context.dp(76); textSize = 21f
+                setTextColor(if(destructive && which == AlertDialog.BUTTON_POSITIVE) danger else if(which == AlertDialog.BUTTON_NEGATIVE) Design.text else accent)
+            }
         }
     }
     fun label(context: Context, value: String, size: Float = 22f, color: Int = text, bold: Boolean = false) = TextView(context).apply {
@@ -70,7 +80,7 @@ object Design {
 }
 
 /** High-frequency touch controls use immediate state feedback, without scale animations. */
-class TouchButton(context: Context, label: String, private val emphasized: Boolean = false) : androidx.appcompat.widget.AppCompatTextView(context) {
+class TouchButton(context: Context, label: String, private val emphasized: Boolean = false, private val destructive: Boolean = false) : androidx.appcompat.widget.AppCompatTextView(context) {
     private var selection: Boolean? = null
     private var appearanceReady = false
     init {
@@ -87,7 +97,7 @@ class TouchButton(context: Context, label: String, private val emphasized: Boole
     private fun refreshAppearance() {
         if (!appearanceReady) return
         val selected = selection == true || emphasized
-        setTextColor(if (selected) Design.background else Design.text)
+        setTextColor(if (destructive) Design.danger else if (selected) Design.background else Design.text)
         background = Design.surface(if (selected) Design.accent else Design.raised, 22 * resources.displayMetrics.density,
             if (hasFocus()) Design.accent else null)
         alpha = if (!isEnabled) .42f else if (isPressed) .78f else 1f

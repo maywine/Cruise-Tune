@@ -2,6 +2,7 @@
     <item type="id" name="player_root" />
     <item type="id" name="player_seek" />
     <item type="id" name="player_title" />
+    <item type="id" name="player_status" />
     <item type="id" name="player_times" />
     <item type="id" name="player_tabs" />
     <item type="id" name="player_list" />

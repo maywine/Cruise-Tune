@@ -33,6 +33,23 @@ class LibraryDatabaseTest {
         assertTrue(restored.playIntent); assertTrue(restored.shuffled); assertEquals(2, restored.repeatMode)
         database.readableDatabase.rawQuery("PRAGMA synchronous", null).use { it.moveToFirst(); assertEquals(2, it.getInt(0)) }
     }
+    @Test fun removedSourceCannotReturnThroughBackupOrLatePositionSave() {
+        val webSource=MusicSource("web",SourceKind.QUARK,"Music","web-root","web-account")
+        database.saveSource(webSource)
+        val old=track("old");val web=track("web-song").copy(sourceId="web")
+        database.replaceScan(source.id,listOf(old));database.replaceScan("web",listOf(web))
+        val before=snapshot(10,listOf(old,web),42000).copy(index=1)
+        database.saveQueue(before);database.savePosition(before.copy(positionMs=45000))
+        val after=SourceRemoval.queue(before.copy(positionMs=45000),setOf(source.id),11)
+        database.removeSources(setOf(source.id),after)
+        database.savePosition(before.copy(positionMs=60000))
+        database.close();database=LibraryDatabase(app)
+        assertEquals(listOf(webSource),database.sources());assertEquals(listOf(web),database.tracks())
+        assertEquals(listOf(web),database.restore().entries.map { it.track });assertEquals(45000L,database.restore().positionMs)
+        assertNull(database.findTrack(old.id))
+        database.removeSources(setOf("web"),SourceRemoval.queue(database.restore(),setOf("web"),12))
+        assertTrue(database.restore().entries.isEmpty());assertTrue(database.sources().isEmpty())
+    }
     @Test fun stalePlaybackEventCannotOverwriteNewQueueCheckpoint() {
         val old = snapshot(1, listOf(track("old")), 1000)
         database.saveQueue(old); database.saveQueue(snapshot(2, listOf(track("new")), 2000))

@@ -31,6 +31,31 @@ class UiReviewFixesTest {
         shadowOf(app).declareComponentUnbindable(android.content.ComponentName(app,com.cruisetune.player.playback.PlaybackService::class.java))
     }
     private fun views(view:View):List<View> = listOf(view) + if(view is ViewGroup)(0 until view.childCount).flatMap { views(view.getChildAt(it)) } else emptyList()
+    @Test fun defaultCloudEntryUsesWebQrEvenWhenATokenAccountExists() {
+        val app=RuntimeEnvironment.getApplication() as CruiseApplication
+        app.preferences.edit().remove("quarkAccount").putString("quarkDirectAccount","test-token-account").commit()
+        val activity=Robolectric.buildActivity(MainActivity::class.java).create().start().resume().visible()
+        try {
+            ReflectionHelpers.callInstanceMethod<Unit>(activity.get(),"showAddSource")
+            val dialog=ShadowDialog.getLatestDialog()
+            views(dialog.window!!.decorView).filterIsInstance<TextView>().single { it.text.toString()=="连接夸克网盘" }.performClick()
+            assertEquals(QuarkLoginActivity::class.java.name,shadowOf(activity.get()).nextStartedActivityForResult.intent.component!!.className)
+            assertEquals("test-token-account",app.preferences.getString("quarkDirectAccount",null))
+        } finally {activity.pause().stop().destroy();app.preferences.edit().remove("quarkDirectAccount").commit()}
+    }
+    @Test fun tokenAuthorizationRemainsAnExplicitAlternativeInAccountManagement() {
+        val app=RuntimeEnvironment.getApplication() as CruiseApplication
+        app.preferences.edit().remove("quarkAccount").remove("quarkDirectAccount").commit()
+        val activity=Robolectric.buildActivity(MainActivity::class.java).create().start().resume().visible()
+        try {
+            ReflectionHelpers.callInstanceMethod<Unit>(activity.get(),"showAccountManagement")
+            val dialog=ShadowDialog.getLatestDialog()
+            val labels=views(dialog.window!!.decorView).filterIsInstance<TextView>()
+            assertTrue(labels.any { it.text.toString()=="扫码登录夸克" })
+            labels.single { it.text.toString()=="使用 Token 授权" }.performClick()
+            assertEquals(QuarkDirectLoginActivity::class.java.name,shadowOf(activity.get()).nextStartedActivityForResult.intent.component!!.className)
+        } finally {activity.pause().stop().destroy()}
+    }
     private fun measure(activity:MainActivity,width:Int,height:Int) {
         androidx.core.view.ViewCompat.dispatchApplyWindowInsets(activity.findViewById(R.id.player_root),
             androidx.core.view.WindowInsetsCompat.Builder().setInsets(androidx.core.view.WindowInsetsCompat.Type.statusBars(),androidx.core.graphics.Insets.of(0,24,0,0)).build())
@@ -39,14 +64,14 @@ class UiReviewFixesTest {
         shadowOf(Looper.getMainLooper()).idle()
     }
     @Test fun coreControlsFitShortAndNarrowLandscapeAndLargeText() {
-        for ((w,h,font) in listOf(Triple(640,360,1f),Triple(667,375,1f),Triple(853,480,1f),Triple(1280,720,1f),Triple(640,360,1.6f))) {
-            RuntimeEnvironment.setQualifiers("w${w}dp-h${h}dp-land-mdpi")
+        for ((w,h,font) in listOf(Triple(640,360,1f),Triple(667,375,1f),Triple(853,480,1f),Triple(1280,720,1f),Triple(640,360,1.6f),Triple(360,640,1f),Triple(360,640,1.6f))) {
+            RuntimeEnvironment.setQualifiers("w${w}dp-h${h}dp-${if(w>h) "land" else "port"}-mdpi")
             RuntimeEnvironment.setFontScale(font)
             val controller=Robolectric.buildActivity(MainActivity::class.java).create().start().resume().visible()
             try {
                 val a=controller.get();measure(a,w,h)
                 val root=a.findViewById<View>(R.id.player_root);val rootRect=Rect();root.getGlobalVisibleRect(rootRect)
-                for(id in listOf(R.id.player_seek,R.id.player_times,R.id.player_tabs,R.id.player_previous,R.id.player_play,R.id.player_next)) {
+                for(id in listOf(R.id.player_status,R.id.player_seek,R.id.player_times,R.id.player_tabs,R.id.player_previous,R.id.player_play,R.id.player_next)) {
                     val v=a.findViewById<View>(id);val visible=Rect()
                     assertTrue("$w x $h, font $font: hidden $id",v.getGlobalVisibleRect(visible))
                     assertEquals("$w x $h: clipped width $id",v.width,visible.width())
@@ -60,6 +85,46 @@ class UiReviewFixesTest {
                 assertTrue("The list must retain a useful viewport",a.findViewById<View>(R.id.player_list).height>=64)
             } finally {controller.pause().stop().destroy()}
         }
+    }
+    @Test fun compactStatusKeepsFullErrorAvailableOnTap() {
+        RuntimeEnvironment.setQualifiers("w640dp-h360dp-land-mdpi")
+        RuntimeEnvironment.setFontScale(1.6f)
+        val controller=Robolectric.buildActivity(MainActivity::class.java).create().start().resume().visible()
+        try {
+            val a=controller.get();val message="文件超过夸克当前的下载上限（50 MiB），请检查当前账号下载权限"
+            a.findViewById<TextView>(R.id.player_status).text=message
+            measure(a,640,360)
+            val status=a.findViewById<TextView>(R.id.player_status);val rect=Rect()
+            assertTrue(status.getGlobalVisibleRect(rect));assertEquals(status.height,rect.height())
+            status.performClick()
+            val dialog=ShadowDialog.getLatestDialog()
+            assertTrue(views(dialog.window!!.decorView).filterIsInstance<TextView>().any { it.text.toString()==message && it.ellipsize==null })
+        } finally {controller.pause().stop().destroy()}
+    }
+    @Test fun removalDialogUsesReadableBodyAndDistinctDestructiveAction() {
+        val activity=Robolectric.buildActivity(MainActivity::class.java).create().start().resume().visible()
+        try {
+            val a=activity.get();val dialog=AlertDialog.Builder(a).setTitle("移除音乐目录").setMessage("移除本机记录，网盘文件不会删除")
+                .setNegativeButton("取消",null).setPositiveButton("移除",null).create()
+            dialog.show();Design.styleDialog(dialog,a,destructive=true)
+            val scale=a.resources.displayMetrics.scaledDensity
+            assertEquals(20f,dialog.findViewById<TextView>(android.R.id.message)!!.textSize/scale,.01f)
+            assertEquals(Design.danger,dialog.getButton(AlertDialog.BUTTON_POSITIVE).currentTextColor)
+            assertEquals(Design.text,dialog.getButton(AlertDialog.BUTTON_NEGATIVE).currentTextColor)
+            assertTrue(dialog.getButton(AlertDialog.BUTTON_POSITIVE).minHeight>=76*a.resources.displayMetrics.density)
+            dialog.dismiss()
+        } finally {activity.pause().stop().destroy()}
+    }
+    @Test fun modePickerShowsCurrentModeAndSelectsAnExactTarget() {
+        val activity=Robolectric.buildActivity(MainActivity::class.java).create().start().resume().visible()
+        try {
+            var selected:Int?=null
+            val dialog=PlaybackModes.show(activity.get(),androidx.media3.common.Player.REPEAT_MODE_ONE){selected=it}
+            val radios=views(dialog.window!!.decorView).filterIsInstance<android.widget.RadioButton>()
+            assertEquals(3,radios.size);assertEquals("单曲循环",radios.single { it.isChecked }.text.toString());assertNull(selected)
+            radios.single { it.text.toString()=="列表循环" }.performClick()
+            assertEquals(androidx.media3.common.Player.REPEAT_MODE_ALL,selected);assertFalse(dialog.isShowing)
+        } finally {activity.pause().stop().destroy()}
     }
     @Test fun touchButtonHasCurrentTextRoleAndSelectionSemanticsWithoutScale() {
         val context=RuntimeEnvironment.getApplication()

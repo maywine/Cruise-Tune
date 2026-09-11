@@ -42,6 +42,9 @@ import com.cruisetune.player.playback.PlaybackService
 import com.cruisetune.player.ui.Design.dp
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlin.coroutines.resume
+import android.view.Choreographer
 import java.util.ArrayDeque
 
 @UnstableApi
@@ -81,6 +84,9 @@ class MainActivity : CruiseActivity() {
     private var trackPayload: String? = null
     private var trackModel: Track? = null
     private var artworkJob: Job? = null
+    private val cacheTrack = MutableStateFlow<Track?>(null)
+    private var cacheStatus = TrackCacheStatus(null, "")
+    private var modeSetting: TextView? = null
     private data class PanelViews(val heading: TextView, val scroll: ScrollView, val content: LinearLayout)
     private val panels = java.util.WeakHashMap<AlertDialog, PanelViews>()
     private var settingsDialog: AlertDialog? = null
@@ -99,7 +105,14 @@ class MainActivity : CruiseActivity() {
         }
     }
     private val quarkLogin = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == RESULT_OK) { toast("夸克已连接，请选择音乐目录"); showQuarkFolders() }
+        if (result.resultCode == RESULT_OK) {
+            if (result.data?.getBooleanExtra(QuarkLoginActivity.RECONNECTED, false) == true) {
+                toast("原音乐目录已重新连接")
+                // Resume the existing queue only when reconnect was requested for this track.
+                if (result.data?.getStringExtra(QuarkLoginActivity.RETRY_TRACK) == currentTrack()?.id && currentTrack() != null)
+                    command(PlaybackService.RETRY)
+            } else { toast("夸克已连接，请选择音乐目录"); showQuarkFolders() }
+        }
     }
     private val directLogin = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == RESULT_OK) { toast("夸克已授权，请选择音乐目录"); showQuarkFolders(SourceKind.QUARK_OPEN) }
@@ -114,7 +127,10 @@ class MainActivity : CruiseActivity() {
         if (savedInstanceState?.getBoolean("settingsOpen") == true) window.decorView.post {
             showSettings(savedInstanceState.getInt("settingsScroll"))
         }
-        controllerFuture = MediaController.Builder(this, SessionToken(this, ComponentName(this, PlaybackService::class.java))).buildAsync().also { future ->
+        controllerFuture = MediaController.Builder(this, SessionToken(this, ComponentName(this, PlaybackService::class.java)))
+            .setListener(object : MediaController.Listener {
+                override fun onExtrasChanged(controller: MediaController, extras: Bundle) { renderPlayer(); renderList() }
+            }).buildAsync().also { future ->
             future.addListener({
                 if (isDestroyed) return@addListener
                 runCatching { future.get() }.onSuccess { c ->
@@ -122,7 +138,7 @@ class MainActivity : CruiseActivity() {
                     c.addListener(object : Player.Listener {
                         override fun onEvents(player: Player, events: Player.Events) {
                             renderPlayer()
-                            if (events.containsAny(Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION)) renderList()
+                            if (events.containsAny(Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_REPEAT_MODE_CHANGED)) renderList()
                         }
                     })
                     if (savedInstanceState == null) command(PlaybackService.RESUME_ON_OPEN)
@@ -140,7 +156,23 @@ class MainActivity : CruiseActivity() {
                         renderPlayer()
                     }
                 }
-                launch { while (isActive) { renderPlayer(); delay(500) } }
+                launch {
+                    cacheStatusFlow(cacheTrack, { app.media.status(it) }).collect { status ->
+                        cacheStatus = status
+                        if (currentTrack()?.cacheKey == status.key) renderPlayer()
+                    }
+                }
+                launch {
+                    val choreographer = Choreographer.getInstance()
+                    while (isActive) {
+                        renderProgress()
+                        if (controller?.isPlaying == true) suspendCancellableCoroutine<Unit> { continuation ->
+                            val frame = Choreographer.FrameCallback { if (continuation.isActive) continuation.resume(Unit) }
+                            choreographer.postFrameCallback(frame)
+                            continuation.invokeOnCancellation { choreographer.removeFrameCallback(frame) }
+                        } else delay(250)
+                    }
+                }
             }
         }
     }
@@ -159,10 +191,22 @@ class MainActivity : CruiseActivity() {
             v.setPadding(dp(pad)+safe.left, dp(6)+safe.top, dp(pad)+safe.right, dp(8)+safe.bottom); insets
         }
         val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        banner = Design.label(this,"继续你的旅程",if(compact)16f else 18f,Design.accent).apply {
+            id=R.id.player_status; maxLines=1; ellipsize=TextUtils.TruncateAt.END; gravity=Gravity.CENTER_VERTICAL
+            minHeight=dp(if(compact)56 else 44); isFocusable=true
+            setOnClickListener { showPlaybackStatus() }
+            contentDescription="播放状态，点按查看详情"
+            val info = ContextCompat.getDrawable(this@MainActivity,android.R.drawable.ic_dialog_info)?.mutate()
+            info?.setTint(Design.accent); info?.setBounds(0,0,dp(20),dp(20))
+            setCompoundDrawablesRelative(info,null,null,null); compoundDrawablePadding=dp(6)
+        }
         val brand = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        brand.addView(Design.label(this,"Cruise Tune",if (compact) 22f else 28f,bold=true).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END })
-        if (!compact) brand.addView(Design.label(this,"此刻，听你喜欢",17f,Design.secondary).apply { setPadding(0,dp(4),0,0) })
-        header.addView(brand,LinearLayout.LayoutParams(0,-2,1f))
+        if (compact) brand.addView(banner,LinearLayout.LayoutParams(-1,dp(headerHeight)))
+        else {
+            brand.addView(Design.label(this,"Cruise Tune",28f,bold=true).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END })
+            if(config.fontScale <= 1.3f) brand.addView(Design.label(this,"此刻，听你喜欢",17f,Design.secondary).apply { setPadding(0,dp(4),0,0) })
+        }
+        header.addView(brand,LinearLayout.LayoutParams(0,-2,1f).apply { marginEnd=dp(8) })
         fun headerButton(label:String, action:()->Unit) = TouchButton(this,label).apply {
             textSize=if(compact)18f else 22f; minHeight=dp(headerHeight); setPadding(dp(8),0,dp(8),0); maxLines=1; setOnClickListener { action() }
         }
@@ -172,18 +216,17 @@ class MainActivity : CruiseActivity() {
 
         val body=LinearLayout(this).apply { orientation=if(spec.landscape)LinearLayout.HORIZONTAL else LinearLayout.VERTICAL }
         val now=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(if(compact)12 else 20),dp(if(compact)8 else 20),dp(if(compact)12 else 20),dp(if(compact)8 else 16)); background=Design.surface(Design.panel,dp(24).toFloat()) }
-        banner=Design.label(this,"继续你的旅程",18f,Design.accent).apply { maxLines=1;ellipsize=TextUtils.TruncateAt.END }
         if(!compact)now.addView(banner,LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(12)})
         val info=LinearLayout(this).apply{gravity=Gravity.CENTER_VERTICAL}
         cover=CoverView(this).apply{visibility=if(spec.showCover)View.VISIBLE else View.GONE}
         info.addView(cover,LinearLayout.LayoutParams(dp(if(compact)56 else if(spec.landscape)160 else 80),dp(if(compact)56 else if(spec.landscape)160 else 80)))
         val titles=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(if(spec.showCover)dp(if(compact)8 else 16)else 0,0,0,0)}
-        title=Design.label(this,"让旅途有音乐",if(compact)22f else 28f,bold=true).apply{id=R.id.player_title;maxLines=if(compact)1 else 2;ellipsize=TextUtils.TruncateAt.END;letterSpacing=-.015f}
+        title=Design.label(this,"让旅途有音乐",if(compact)22f else 28f,bold=true).apply{id=R.id.player_title;maxLines=if(compact && spec.landscape)1 else 2;ellipsize=TextUtils.TruncateAt.END;letterSpacing=-.015f}
         artist=Design.label(this,"从音乐目录开始",20f,Design.secondary).apply{maxLines=1;ellipsize=TextUtils.TruncateAt.END}
         format=Design.label(this,"",if(compact)15f else 18f,Design.accent).apply{maxLines=1;ellipsize=TextUtils.TruncateAt.END}
         titles.addView(title)
         if(!compact)titles.addView(artist,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(8)})
-        if(!compact || (spec.landscape && config.fontScale<=1.3f))titles.addView(format,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(if(compact)4 else 8)})
+        if(!compact || !spec.landscape || config.fontScale<=1.3f)titles.addView(format,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(if(compact)4 else 8)})
         info.addView(titles,LinearLayout.LayoutParams(0,-2,1f));now.addView(info)
         seek=SeekBar(this).apply{
             id=R.id.player_seek;max=10000;minimumHeight=dp(if(compact)48 else 64);contentDescription="播放进度"
@@ -228,13 +271,17 @@ class MainActivity : CruiseActivity() {
         val row=BoundedControlRow(this,if(spec.showModes)720 else 480).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
         fun addFooter(button:TouchButton,weight:Float){button.minHeight=dp(76);button.setPadding(dp(8),0,dp(8),0);row.addView(button,LinearLayout.LayoutParams(0,dp(76),weight).apply{if(row.childCount>0)marginStart=dp(8)})}
         shuffle=TouchButton(this,"随机").apply{setOnClickListener{command(PlaybackService.SHUFFLE)}}
-        repeat=TouchButton(this,"顺序").apply{setOnClickListener{controller?.let{it.repeatMode=(it.repeatMode+1)%3}}}
+        repeat=TouchButton(this,"顺序").apply{setOnClickListener{showRepeatModePicker()}}
         previous=TouchButton(this,"上一首").apply{id=R.id.player_previous;textSize=if(compact)18f else 22f;setOnClickListener{controller?.let{if(it.hasPreviousMediaItem())it.seekToPreviousMediaItem()else it.seekTo(0)}}}
         next=TouchButton(this,"下一首").apply{id=R.id.player_next;textSize=if(compact)18f else 22f;setOnClickListener{controller?.seekToNextMediaItem()}}
         play=TouchButton(this,if(library.tracks.isEmpty())"添加" else "播放",true).apply{id=R.id.player_play;textSize=24f;setOnClickListener{
             val c=controller
             if(c==null){if(library.tracks.isEmpty())showSources();return@setOnClickListener}
-            if(c.isPlaying||c.playWhenReady)c.pause()
+            if(c.playerError != null) {
+                if(c.sessionExtras.getBoolean("needsLogin")) reconnectCurrentSource()
+                else { command(PlaybackService.RETRY); askNotificationPermission() }
+            }
+            else if(c.isPlaying||c.playWhenReady)c.pause()
             else if(c.mediaItemCount>0){if(c.playbackState==Player.STATE_ENDED)c.seekTo(0);c.prepare();c.play();askNotificationPermission()}
             else if(library.tracks.isEmpty())showSources()
             else library.tracks.firstOrNull()?.let{command(PlaybackService.PLAY_TRACK,Bundle().apply{putString("trackId",it.id)});askNotificationPermission()}
@@ -257,6 +304,13 @@ class MainActivity : CruiseActivity() {
         empty.visibility = if (tracks.isEmpty()) View.VISIBLE else View.GONE
         empty.text = if (showingQueue) "队列还是空的\n从我的曲库选一首音乐" else "添加一个音乐目录\n喜欢的音乐，就在路上"
         listTitle.text = if (library.scanning != null) "正在读取目录 · ${library.scannedCount} 首" else "${if (showingQueue) "接下来播放" else library.sources.find { it.id == selectedSource }?.title ?: "全部音乐"} · ${tracks.size} 首"
+        val layout = resources.configuration.let { PlayerLayoutSpec.forWindow(it.screenWidthDp,it.screenHeightDp,it.fontScale) }
+        if (!layout.showModes && library.scanning == null) {
+            val mode = when(c?.repeatMode) { Player.REPEAT_MODE_ONE -> "单曲"; Player.REPEAT_MODE_ALL -> "循环"; else -> "顺序" }
+            val name = if(showingQueue) "队列" else library.sources.find { it.id == selectedSource }?.title ?: "曲库"
+            listTitle.text = "$mode · $name · ${tracks.size} 首"
+            listTitle.contentDescription = "${PlaybackModes.label(c?.repeatMode ?: Player.REPEAT_MODE_OFF)}，$name，${tracks.size} 首"
+        }
     }
     private fun renderPlayer() {
         if (!::title.isInitialized) return
@@ -266,7 +320,8 @@ class MainActivity : CruiseActivity() {
         val track = currentTrack()
         title.updateText(item?.mediaMetadata?.title ?: "让旅途有音乐")
         artist.updateText(item?.mediaMetadata?.artist?.takeIf { it.isNotBlank() } ?: "连接夸克网盘，选择音乐目录")
-        val status = track?.let { runCatching { app.media.status(it) }.getOrDefault("在线") }.orEmpty()
+        cacheTrack.value = track
+        val status = if (track == null) "" else if (cacheStatus.key == track.cacheKey) cacheStatus.text else "正在检查缓存"
         format.updateText(if (track == null) "" else "${track.relativePath.substringAfterLast('.', "音频").uppercase()} · $status")
         if (renderedTrack != id) {
             renderedTrack = id; cover.seed = id?.hashCode() ?: 0; cover.artwork(null); renderedArtworkHash = null; renderedArtworkBytes = null
@@ -286,36 +341,59 @@ class MainActivity : CruiseActivity() {
                 }
             }
         }
-        val total = knownDuration()
-        seek.isEnabled = total > 0
-        seek.alpha = if (total > 0) 1f else .35f
-        seek.contentDescription = if (total > 0) "播放进度" else "播放进度，等待加载时长，已恢复至 ${time(c.currentPosition)}"
-        if (!seeking) { seek.progress = if (total > 0) (c.currentPosition * 10000 / total).toInt().coerceIn(0, 10000) else 0; elapsed.updateText(time(c.currentPosition)) }
-        duration.updateText(if (total > 0) time(total) else "—")
-        play.updateText(if (c.playWhenReady) "暂停" else if (c.mediaItemCount == 0 && library.tracks.isEmpty()) "添加" else if (c.currentPosition > 0) "继续" else "播放")
-        play.contentDescription = if (c.playWhenReady) "暂停播放" else if (c.mediaItemCount == 0 && library.tracks.isEmpty()) "添加音乐目录" else "继续播放"
+        renderProgress()
+        val playAction = PlaybackAction.choose(c.playerError != null, c.sessionExtras.getBoolean("needsLogin"), c.playWhenReady,
+            c.mediaItemCount == 0 && library.tracks.isEmpty(), c.currentPosition > 0)
+        play.updateText(playAction.label)
+        play.contentDescription = playAction.description
         previous.isEnabled = c.mediaItemCount > 0
         next.isEnabled = c.hasNextMediaItem()
         shuffle.selectedState(c.sessionExtras.getBoolean("shuffled"))
         repeat.updateText(when (c.repeatMode) { Player.REPEAT_MODE_ONE -> "单曲"; Player.REPEAT_MODE_ALL -> "循环"; else -> "顺序" })
         repeat.contentDescription = "播放顺序"
+        modeSetting?.updateText("播放顺序：${PlaybackModes.label(c.repeatMode)}")
         ViewCompat.setStateDescription(repeat, when(c.repeatMode) { Player.REPEAT_MODE_ONE -> "单曲循环"; Player.REPEAT_MODE_ALL -> "列表循环"; else -> "顺序播放" })
         shuffle.contentDescription = "随机播放"
         ViewCompat.setStateDescription(shuffle, if(c.sessionExtras.getBoolean("shuffled")) "已开启" else "已关闭")
         banner.updateText(c.sessionExtras.getString("error") ?: when {
             c.playerError != null -> readableError(c.playerError?.cause ?: c.playerError!!)
-            c.playWhenReady && c.playbackState == Player.STATE_BUFFERING -> "正在缓冲，网络恢复后继续"
+            c.playWhenReady && c.playbackState == Player.STATE_BUFFERING -> "正在缓冲"
             c.isPlaying -> "正在播放"
             item != null -> "继续上次播放 · ${time(c.currentPosition)}"
             else -> "继续你的旅程"
         })
+        banner.contentDescription = "播放状态：${banner.text}，点按查看完整详情"
         offline.isEnabled = track != null && track.localUri.isBlank()
         offline.updateText(if (status == "可离线播放") "已保留离线" else "保留离线")
         adapter.updatePlayback(id, playbackLabel(c))
     }
+    private fun renderProgress() {
+        if (!::seek.isInitialized) return
+        val c = controller ?: return
+        val total = knownDuration()
+        seek.isEnabled = total > 0
+        seek.alpha = if (total > 0) 1f else .35f
+        seek.contentDescription = if(total > 0) "播放进度" else "播放进度，等待加载时长，已恢复至 ${time(c.currentPosition)}"
+        if (!seeking) {
+            seek.progress = if(total > 0) (c.currentPosition * 10000 / total).toInt().coerceIn(0,10000) else 0
+            elapsed.updateText(time(c.currentPosition))
+        }
+        duration.updateText(if(total > 0) time(total) else "—")
+    }
+    private fun showPlaybackStatus() {
+        val (dialog, content) = panel("播放状态")
+        paragraph(content, banner.text.toString())
+        controller?.let { paragraph(content,"播放顺序：${PlaybackModes.label(it.repeatMode)}") }
+        showPanel(dialog)
+    }
+    private fun showRepeatModePicker() {
+        val c = controller ?: return
+        PlaybackModes.show(this,c.repeatMode) { mode -> c.repeatMode=mode; renderPlayer(); renderList() }
+    }
     private fun knownDuration(): Long = controller?.duration?.takeIf { it > 0 && it != C.TIME_UNSET }
         ?: currentTrack()?.durationMs?.takeIf { it > 0 } ?: 0
     private fun playbackLabel(c: Player?): String = when {
+        c?.playerError != null -> "播放失败"
         c?.isPlaying == true -> "正在播放"
         c?.playWhenReady == true && c.playbackState == Player.STATE_BUFFERING -> "正在缓冲"
         else -> "已暂停"
@@ -338,9 +416,9 @@ class MainActivity : CruiseActivity() {
             section(content, "我的音乐目录")
             library.sources.forEach { source ->
                 val row = LinearLayout(this)
-                val displayTitle = if(library.sources.count { it.title == source.title } > 1) source.title + when(source.kind) { SourceKind.LOCAL -> " · 本地"; SourceKind.QUARK -> " · 网页"; SourceKind.QUARK_OPEN -> " · 夸克" } else source.title
+                val displayTitle = if(library.sources.count { it.title == source.title } > 1) source.title + when(source.kind) { SourceKind.LOCAL -> " · 本地"; SourceKind.QUARK -> " · 网页"; SourceKind.QUARK_OPEN -> " · Token" } else source.title
                 row.addView(TouchButton(this, displayTitle).apply { maxLines=1; setOnClickListener { selectedSource=source.id;showingQueue=false;renderList();dialog.dismiss() } },LinearLayout.LayoutParams(0,-2,1f))
-                row.addView(TouchButton(this,"刷新").apply { textSize=18f;setPadding(dp(8),0,dp(8),0);setOnClickListener { app.scope.launch { app.library.scan(source) };dialog.dismiss() } },LinearLayout.LayoutParams(dp(80),dp(76)).apply { marginStart=dp(8) })
+                row.addView(TouchButton(this,"管理").apply { textSize=18f;setPadding(dp(8),0,dp(8),0);setOnClickListener { dialog.dismiss();showSourceManagement(source) } },LinearLayout.LayoutParams(dp(80),dp(76)).apply { marginStart=dp(8) })
                 content.addView(row,LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(8) })
             }
             action(content,"查看全部音乐") { selectedSource=null;showingQueue=false;renderList();dialog.dismiss() }
@@ -354,24 +432,68 @@ class MainActivity : CruiseActivity() {
         }
         showPanel(dialog)
     }
+    private fun showSourceManagement(source: MusicSource) {
+        val (dialog, content) = panel("目录管理")
+        val method = when(source.kind) { SourceKind.LOCAL -> "本地目录"; SourceKind.QUARK -> "网页登录"; SourceKind.QUARK_OPEN -> "Token 授权" }
+        paragraph(content,"${source.title}\n$method")
+        action(content,"刷新音乐目录") { dialog.dismiss();app.scope.launch { app.library.scan(source) } }
+        action(content,"移除音乐目录",destructive=true) {
+            dialog.dismiss()
+            confirmLocalRemoval("移除 ${source.title}","读取方式：$method。移除此目录的本机曲库、队列条目和离线缓存，网盘文件不会删除。") {
+                if(selectedSource == source.id) selectedSource=null
+                command(PlaybackService.REMOVE_SOURCE,Bundle().apply { putString("sourceId",source.id) })
+            }
+        }
+        showPanel(dialog)
+    }
     private fun showAddSource() {
         val (dialog, content)=panel("添加音乐目录")
-        action(content,if(app.preferences.contains("quarkDirectAccount")) "夸克网盘目录" else "连接夸克网盘") {
+        action(content,if(app.preferences.contains("quarkAccount")) "夸克网盘目录" else "连接夸克网盘") {
             dialog.dismiss()
-            if(app.preferences.contains("quarkDirectAccount"))showQuarkFolders(SourceKind.QUARK_OPEN)
-            else directLogin.launch(Intent(this,QuarkDirectLoginActivity::class.java))
+            if(app.preferences.contains("quarkAccount"))showQuarkFolders()
+            else launchWebLogin(null)
         }
         action(content,"本地音乐目录") { dialog.dismiss();localDirectory.launch(null) }
         showPanel(dialog)
     }
     private fun showAccountManagement() {
         val (dialog,content)=panel("账号管理")
-        paragraph(content,if(app.preferences.contains("quarkDirectAccount")) "夸克网盘已连接，选择音乐目录时会复用当前授权。" else "连接夸克网盘后，可以选择授权范围内的音乐目录。")
-        action(content,if(app.preferences.contains("quarkDirectAccount")) "切换夸克账号" else "扫码连接夸克") { dialog.dismiss();directLogin.launch(Intent(this,QuarkDirectLoginActivity::class.java)) }
-        section(content,"备用网页登录")
-        if(app.preferences.contains("quarkAccount"))action(content,"原网页登录的音乐目录") { dialog.dismiss();showQuarkFolders() }
-        action(content,if(app.preferences.contains("quarkAccount")) "重新网页登录" else "使用网页登录") { dialog.dismiss();quarkLogin.launch(Intent(this,QuarkLoginActivity::class.java)) }
+        paragraph(content,if(app.preferences.contains("quarkAccount")) "网页登录已连接，选择音乐目录时会复用已保存的登录状态。" else "默认使用网页扫码登录，连接后即可选择音乐目录。")
+        if(app.preferences.contains("quarkAccount"))action(content,"夸克网盘目录") { dialog.dismiss();showQuarkFolders() }
+        action(content,if(app.preferences.contains("quarkAccount")) "重新扫码登录" else "扫码登录夸克") { dialog.dismiss();launchWebLogin(app.preferences.getString("quarkAccount", null)) }
+        section(content,"其他登录方式")
+        if(app.preferences.contains("quarkDirectAccount"))action(content,"Token 授权目录") { dialog.dismiss();showQuarkFolders(SourceKind.QUARK_OPEN) }
+        action(content,if(app.preferences.contains("quarkDirectAccount")) "重新 Token 授权" else "使用 Token 授权") { dialog.dismiss();directLogin.launch(Intent(this,QuarkDirectLoginActivity::class.java)) }
+        app.preferences.getString("quarkDirectAccount",null)?.let { account ->
+            action(content,"移除 Token 授权与目录",destructive=true) {
+                dialog.dismiss()
+                confirmLocalRemoval("移除本机 Token 授权", "清除本机 Token 凭证、对应音乐目录、队列条目和离线缓存。网页登录和网盘文件不受影响。") {
+                    selectedSource = null
+                    command(PlaybackService.DISCONNECT_TOKEN, Bundle().apply { putString("accountId", account) })
+                }
+            }
+        }
         showPanel(dialog)
+    }
+    private fun confirmLocalRemoval(title: String, message: String, action: () -> Unit) {
+        val dialog = AlertDialog.Builder(this).setTitle(title).setMessage(message)
+            .setNegativeButton("取消",null).setPositiveButton("移除") { _, _ -> action() }.create()
+        dialog.window?.setWindowAnimations(0); dialog.show(); Design.styleDialog(dialog,this,destructive=true)
+    }
+    private fun launchWebLogin(account: String?, retryTrack: String? = null) {
+        quarkLogin.launch(Intent(this, QuarkLoginActivity::class.java).apply {
+            account?.let { putExtra(QuarkLoginActivity.RECONNECT_ACCOUNT, it) }
+            retryTrack?.let { putExtra(QuarkLoginActivity.RETRY_TRACK, it) }
+        })
+    }
+    private fun reconnectCurrentSource() {
+        val track = currentTrack() ?: return
+        val source = library.sources.firstOrNull { it.id == track.sourceId } ?: run { showSources(); return }
+        when (source.kind) {
+            SourceKind.QUARK -> launchWebLogin(source.accountId, track.id)
+            SourceKind.QUARK_OPEN -> directLogin.launch(Intent(this, QuarkDirectLoginActivity::class.java))
+            SourceKind.LOCAL -> showSources()
+        }
     }
     private fun showQuarkFolders(kind: SourceKind = SourceKind.QUARK) {
         val account = app.preferences.getString(if (kind == SourceKind.QUARK_OPEN) "quarkDirectAccount" else "quarkAccount", null) ?: return
@@ -386,18 +508,53 @@ class MainActivity : CruiseActivity() {
         content.addView(recursive)
         var current = RemoteEntry("0", "夸克音乐", true, 0, "")
         val stack = ArrayDeque<RemoteEntry>()
+        var visibleFiles: List<RemoteEntry>? = null
+        var browseOnce = false
+        val independentRoots = mutableSetOf<String>()
+        fun sourceFor(entry: RemoteEntry): MusicSource {
+            val identity = if (kind == SourceKind.QUARK_OPEN) com.cruisetune.player.data.open.openFileIdentity(entry.id) else entry.id
+            return MusicSource(stableHash(if(kind == SourceKind.QUARK_OPEN) "quark-open" else "quark", account, identity), kind, entry.name, entry.id, account, recursive.isChecked)
+        }
+        fun pathFor(entry: RemoteEntry) = org.json.JSONArray((stack.toList() + entry).filter { it.id != "0" }.map { it.name }).toString()
         var job: Job? = null
         val choose = TouchButton(this, "使用这个目录", true).apply { isEnabled = false }
         lateinit var load: (RemoteEntry) -> Unit
         load = { entry ->
             current = entry; choose.isEnabled = false; path.text = (stack.map { it.name } + entry.name).joinToString(" / ")
+            visibleFiles = null
+            val explicitlyBrowse = browseOnce; browseOnce = false
             note.text = "正在读取目录…"; folders.removeAllViews(); job?.cancel()
             job = lifecycleScope.launch {
                 try {
+                    if (stack.isNotEmpty()) action(folders, "‹ 返回上级") { load(stack.removeLast()) }
+                    if (!explicitlyBrowse && entry.id !in independentRoots) {
+                        val access = sourceFor(entry); val identityPath = pathFor(entry)
+                        val (existing, candidates) = withContext(Dispatchers.IO) {
+                            app.database.existingSource(access) to app.database.matchingSourcePaths(access, identityPath)
+                        }
+                        if (existing != null) {
+                            note.text = "该目录已在曲库中，可直接使用，无需重新读取"
+                            recursive.isChecked = existing.recursive
+                            choose.isEnabled = true
+                            action(folders,"继续浏览子目录") { browseOnce = true; load(entry) }
+                            return@launch
+                        }
+                        if (candidates.isNotEmpty()) {
+                            note.text = "该目录可能已添加。同一账号的同一目录可直接复用曲库。"
+                            candidates.forEach { candidate ->
+                                val mode = if(candidate.kind == SourceKind.QUARK) "网页" else "Token"
+                                action(folders,"同一账号目录，使用 ${candidate.title}（$mode）") {
+                                    dialog.dismiss(); registerQuarkDirectory(access, identityPath, confirmedExistingId = candidate.id)
+                                }
+                            }
+                            action(folders,"不同账号或目录，继续浏览") { independentRoots += entry.id; browseOnce = true; load(entry) }
+                            return@launch
+                        }
+                    }
                     val files = app.library.provider(kind, account).listChildren(entry.id)
                     if (!isActive) return@launch
+                    visibleFiles = files
                     note.text = "${files.count { AudioFiles.mime(it.name) != null && !it.isDirectory }} 首音频 · ${files.count { it.isDirectory }} 个子目录"
-                    if (stack.isNotEmpty()) action(folders, "‹ 返回上级") { load(stack.removeLast()) }
                     files.filter { it.isDirectory }.sortedWith { a, b -> NaturalOrder.compare(a.name, b.name) }.forEach { folder ->
                         action(folders, "${folder.name}  ›") { stack.addLast(current); load(folder) }
                     }
@@ -409,7 +566,7 @@ class MainActivity : CruiseActivity() {
                         action(folders, "重新登录夸克") {
                             dialog.dismiss()
                             if (kind == SourceKind.QUARK_OPEN) directLogin.launch(Intent(this@MainActivity, QuarkDirectLoginActivity::class.java))
-                            else quarkLogin.launch(Intent(this@MainActivity, QuarkLoginActivity::class.java))
+                            else launchWebLogin(account)
                         }
                     } else {
                         action(folders, "重新读取") { load(current) }
@@ -418,15 +575,42 @@ class MainActivity : CruiseActivity() {
             }
         }
         choose.setOnClickListener {
-            val rootIdentity = if (kind == SourceKind.QUARK_OPEN) com.cruisetune.player.data.open.openFileIdentity(current.id) else current.id
-            val source = MusicSource(stableHash(if (kind == SourceKind.QUARK_OPEN) "quark-open" else "quark", account, rootIdentity), kind, current.name, current.id, account, recursive.isChecked)
-            selectedSource = source.id; showingQueue = false
-            app.scope.launch { app.library.addAndScan(source) }
+            val source = sourceFor(current)
+            val directoryPath = pathFor(current)
             dialog.dismiss()
+            registerQuarkDirectory(source, directoryPath, independent = current.id in independentRoots, initialChildren = visibleFiles)
         }
         content.addView(choose, LinearLayout.LayoutParams(-1, dp(76)).apply { topMargin = dp(16) })
         dialog.setOnDismissListener { job?.cancel() }
         showPanel(dialog); load(current)
+    }
+    private fun registerQuarkDirectory(source: MusicSource, path: String, confirmedExistingId: String? = null,
+        independent: Boolean = false, initialChildren: List<RemoteEntry>? = null) {
+        fun submit(existing: String? = null, asIndependent: Boolean = independent) {
+            app.scope.launch {
+                try {
+                    val registered = app.library.addAndScan(source, path, existing, asIndependent, initialChildren)
+                    if (!isDestroyed) { selectedSource = registered.id; showingQueue = false; renderList() }
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) { if (!isDestroyed) toast(readableError(e)) }
+            }
+        }
+        lifecycleScope.launch {
+            if (confirmedExistingId != null || independent) { submit(confirmedExistingId); return@launch }
+            val (existing, candidates) = withContext(Dispatchers.IO) {
+                app.database.existingSource(source) to app.database.matchingSourcePaths(source, path)
+            }
+            if (existing != null) { submit(); return@launch }
+            if (candidates.isEmpty()) { submit(); return@launch }
+            val (dialog, content) = panel("此目录可能已添加")
+            paragraph(content, "若是同一夸克账号下的同一目录，请使用已有来源，曲库只保留一份，不会再次扫描。不同账号或不同目录请选择独立添加。")
+            candidates.forEach { candidate ->
+                val mode = if (candidate.kind == SourceKind.QUARK) "网页登录" else "Token 授权"
+                action(content, "使用已有：${candidate.title}（$mode）") { dialog.dismiss(); submit(candidate.id) }
+            }
+            action(content, "不同账号或目录，独立添加") { dialog.dismiss(); submit(asIndependent = true) }
+            showPanel(dialog)
+        }
     }
     private fun checkLookAheadCache() {
         val (dialog, content) = panel("后 3 首缓存验证")
@@ -494,7 +678,7 @@ class MainActivity : CruiseActivity() {
         val (dialog,content)=panel("设置")
         settingsDialog=dialog
         populateSettings(dialog,content)
-        dialog.setOnDismissListener { if(settingsDialog===dialog)settingsDialog=null }
+        dialog.setOnDismissListener { if(settingsDialog===dialog) {settingsDialog=null;modeSetting=null} }
         showPanel(dialog)
         panels[dialog]?.scroll?.apply { id=R.id.settings_scroll;post { scrollTo(0,scrollY) } }
     }
@@ -503,13 +687,13 @@ class MainActivity : CruiseActivity() {
         toggle(content, "打开应用时继续播放", "resumeOnOpen", false)
         paragraph(content, "熄屏时自动暂停并保存进度，亮屏后点击继续播放。")
         action(content, "${if (controller?.sessionExtras?.getBoolean("shuffled") == true) "关闭" else "开启"}随机播放") { command(PlaybackService.SHUFFLE); dialog.dismiss() }
-        action(content, "切换顺序／单曲／列表循环") { controller?.let { it.repeatMode = (it.repeatMode + 1) % 3 }; dialog.dismiss() }
+        modeSetting = action(content,"播放顺序：${PlaybackModes.label(controller?.repeatMode ?: Player.REPEAT_MODE_OFF)}") { showRepeatModePicker() }
         section(content,"缓存与离线")
         toggle(content, "自动缓存后 3 首", "prefetchNextTracks", true)
         paragraph(content, "按播放顺序缓存后 3 首完整歌曲，所有网络均可使用；网络中断后持续重试。")
         controller?.sessionExtras?.getString("prefetchStatus")?.let { paragraph(content, it) }
         action(content, "保留当前歌曲离线") { keepCurrentOffline() }
-        action(content, "移除当前歌曲的离线下载") { currentTrack()?.let { app.media.removeOffline(it); toast("已移除离线保留，播放位置继续保存") } }
+        action(content, "移除当前歌曲的离线下载", destructive=true) { currentTrack()?.let { app.media.removeOffline(it); toast("已移除离线保留，播放位置继续保存") } }
         action(content, "重试当前歌曲") { command(PlaybackService.RETRY); dialog.dismiss() }
         action(content, "调整播放进度") {
             val total = controller?.duration?.takeIf { it > 0 } ?: return@action
@@ -596,8 +780,10 @@ class MainActivity : CruiseActivity() {
     private fun paragraph(parent: LinearLayout, text: String) {
         parent.addView(Design.label(this, text, 20f, Design.secondary).apply { setLineSpacing(dp(5).toFloat(), 1f) }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12); bottomMargin = dp(8) })
     }
-    private fun action(parent: LinearLayout, text: String, click: () -> Unit) {
-        parent.addView(TouchButton(this, text).apply { maxLines = 2; setOnClickListener { click() } }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+    private fun action(parent: LinearLayout, text: String, destructive: Boolean = false, click: () -> Unit): TouchButton {
+        val button = TouchButton(this,text,destructive=destructive).apply { maxLines=2;setOnClickListener { click() } }
+        parent.addView(button,LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(12) })
+        return button
     }
     private fun toggle(parent: LinearLayout, text: String, key: String, default: Boolean) {
         parent.addView(CalmSwitch(this).apply {

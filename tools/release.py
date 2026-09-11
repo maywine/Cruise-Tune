@@ -155,10 +155,13 @@ def package(tag, root=ROOT, environ=os.environ):
                 'apk': filename, 'sha256': checksum, 'certificateSha256': expected, 'quarkClientConfigured': True}
     (out / 'release-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     (out / 'SHA256SUMS').write_text(f'{checksum}  {filename}\n')
+    notes_file = root / 'docs/release-notes' / f'{current["name"]}.md'
+    highlights = (notes_file.read_text().strip() if notes_file.is_file() else
+                  '包含本地目录播放、夸克扫码接入、播放进度恢复、后 3 首自动缓存和熄屏暂停。')
     (out / 'RELEASE_NOTES.md').write_text(
         f'# Cruise Tune {current["name"]}\n\n'
         f'Android API 23+ · versionCode {current["code"]}\n\n'
-        '包含本地目录播放、夸克扫码接入、播放进度恢复、后 3 首自动缓存和熄屏暂停。\n\n'
+        f'{highlights}\n\n'
         '下载下方 APK 安装；已有版本须使用相同签名才能保留数据覆盖更新。\n'
         '客户端配置用于授权协议，不包含任何预登录账号或用户令牌。\n\n'
         f'Source commit: `{commit}`\n\n<!-- cruise-tune-release:{tag}:{commit} -->\n')

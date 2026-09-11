@@ -81,6 +81,8 @@ git push origin v0.5.3
 
 附件为 `CruiseTune-<版本>.apk`、`SHA256SUMS`、`release-manifest.json`。GitHub 自动提供标签对应源码归档。不会上传 authCheck 包、签名文件、原始日志或测试账号数据。
 
+每版可在 `docs/release-notes/<VERSION_NAME>.md` 编写更新内容；发布脚本将对应版本的说明与包版本、源码提交一起写入 Release。没有对应文件时使用通用功能说明。
+
 同一工作流的同版本、同提交草稿允许失败后重跑完成上传。已经公开的 Release 或其他草稿不会被覆盖，也不会自动移动标签。配置或短暂网络问题修复后可重跑；代码错误应提交新版本并创建新标签。草稿及上传行为参考 [GitHub CLI release create](https://cli.github.com/manual/gh_release_create)。
 
 ## 本地验证

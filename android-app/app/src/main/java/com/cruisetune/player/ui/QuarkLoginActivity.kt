@@ -1,6 +1,7 @@
 package com.cruisetune.player.ui
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.Bundle
@@ -30,6 +31,11 @@ import kotlinx.coroutines.*
 import java.util.UUID
 
 class QuarkLoginActivity : CruiseActivity() {
+    companion object {
+        const val RECONNECT_ACCOUNT = "reconnectAccount"
+        const val RECONNECTED = "reconnected"
+        const val RETRY_TRACK = "retryTrack"
+    }
     private val app get() = application as CruiseApplication
     private var web: WebView? = null
     private lateinit var root: LinearLayout
@@ -55,7 +61,7 @@ class QuarkLoginActivity : CruiseActivity() {
     private fun showQrScreen() {
         browserMode = false; web?.destroy(); web = null; root.removeAllViews()
         root.addView(Design.label(this, "连接夸克网盘", 28f, bold = true))
-        root.addView(Design.label(this, "用手机夸克 App 扫码，并确认登录", 21f, Design.secondary), LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(12) })
+        root.addView(Design.label(this, if (intent.hasExtra(RECONNECT_ACCOUNT)) "用原夸克账号扫码，恢复已有音乐目录" else "用手机夸克 App 扫码，并确认登录", 21f, Design.secondary), LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(12) })
         val frame = FrameLayout(this)
         qrImage = ImageView(this).apply { setBackgroundColor(Color.WHITE); contentDescription = "夸克登录二维码"; scaleType = ImageView.ScaleType.FIT_CENTER; setPadding(dp(8), dp(8), dp(8), dp(8)) }
         val size = minOf(resources.configuration.screenWidthDp - 60, resources.configuration.screenHeightDp - 230).coerceIn(144, 280)
@@ -150,16 +156,17 @@ class QuarkLoginActivity : CruiseActivity() {
         if (connecting) return
         connecting = true
         lifecycleScope.launch {
-            val id = UUID.randomUUID().toString()
             try {
-                withContext(Dispatchers.IO) { app.vault.put(id, value) }
-                app.library.quark(id).listChildren("0")
+                val reconnect = intent.getStringExtra(RECONNECT_ACCOUNT)
+                val id = reconnect ?: UUID.randomUUID().toString()
+                app.library.connectWebSession(value, reconnect, id)
                 app.preferences.edit().putString("quarkAccount", id).apply()
                 web?.stopLoading(); CookieManager.getInstance().removeAllCookies(null); CookieManager.getInstance().flush()
-                setResult(RESULT_OK); finish()
-            } catch (e: CancellationException) { withContext(NonCancellable + Dispatchers.IO) { app.vault.remove(id) }; throw e }
+                setResult(RESULT_OK, Intent().putExtra(RECONNECTED, reconnect != null)
+                    .putExtra(RETRY_TRACK, intent.getStringExtra(RETRY_TRACK)))
+                finish()
+            } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
-                withContext(Dispatchers.IO) { app.vault.remove(id) }
                 if (!browserMode) qrStatus.text = readableError(e)
                 toast(readableError(e))
             } finally { connecting = false }

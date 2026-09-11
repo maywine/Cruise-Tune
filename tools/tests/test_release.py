@@ -141,6 +141,17 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaises(release.ReleaseError):
             self.package(fingerprint='c' * 64)
 
+    def test_packages_notes_for_the_exact_version_and_keeps_ownership_marker(self):
+        notes = self.root / 'docs/release-notes'
+        notes.mkdir(parents=True)
+        (notes / '0.5.2.md').write_text('本版修复缓存状态。\n')
+        (notes / '0.5.3.md').write_text('Future version notes')
+        self.package()
+        body = (self.root / 'dist/RELEASE_NOTES.md').read_text()
+        self.assertIn('本版修复缓存状态。', body)
+        self.assertNotIn('Future version notes', body)
+        release.verify_dist('v0.5.2', 'b' * 40, self.root)
+
     def test_rejects_debuggable_and_wrong_version_apks(self):
         for badging in ["package: name='com.cruisetune.player' versionCode='11' versionName='0.5.2'\napplication-debuggable",
                         "package: name='com.cruisetune.player' versionCode='11' versionName='0.5.3'"]:

@@ -39,6 +39,7 @@ class MediaCache(private val app: CruiseApplication) {
     val offline = SimpleCache(File(app.filesDir, "offline-cache"), NoOpCacheEvictor(), databaseProvider)
     private val network = DataSource.Factory { ResolvingTrackSource(app) }
     val streamFactory: CacheDataSource.Factory = CacheDataSource.Factory().setCache(stream)
+        .setCacheWriteDataSinkFactory { CompletingCacheSink(CacheDataSink.Factory().setCache(stream)) }
         .setUpstreamDataSourceFactory(network).setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     val playbackFactory: CacheDataSource.Factory = CacheDataSource.Factory().setCache(offline)
         .setCacheWriteDataSinkFactory(null).setUpstreamDataSourceFactory(streamFactory)

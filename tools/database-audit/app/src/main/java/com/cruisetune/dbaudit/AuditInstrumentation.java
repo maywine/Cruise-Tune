@@ -315,7 +315,7 @@ public final class AuditInstrumentation extends Instrumentation {
         }
         return hex(digest.digest());
     }
-    private static String sha(File file) throws Exception { MessageDigest d=MessageDigest.getInstance("SHA-256"); try(InputStream in=new FileInputStream(file)){byte[] b=new byte[65536];int n;while((n=in.read(b))>=0)d.update(b,0,n);}return hex(d.digest()); }
+    static String sha(File file) throws Exception { MessageDigest d=MessageDigest.getInstance("SHA-256"); try(InputStream in=new FileInputStream(file)){byte[] b=new byte[65536];int n;while((n=in.read(b))>=0)d.update(b,0,n);}return hex(d.digest()); }
     private static String hex(byte[] bytes) { StringBuilder s=new StringBuilder();for(byte b:bytes)s.append(String.format(Locale.ROOT,"%02x",b&255));return s.toString(); }
     private static void check(boolean ok, String message) { if(!ok)throw new AssertionError(message); }
     private static void wav(File file) throws Exception {

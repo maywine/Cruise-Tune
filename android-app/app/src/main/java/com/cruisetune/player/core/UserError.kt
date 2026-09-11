@@ -5,7 +5,18 @@ import java.io.IOException
 class UserError(message: String, val needsLogin: Boolean = false, val retryable: Boolean = false) : IOException(message)
 class InvalidMediaRange : java.net.ProtocolException("下载分段信息不匹配，已停止读取以保护缓存")
 
-fun readableError(error: Throwable): String = when (error) {
+/** Media3 wraps provider failures; retain the actionable, sanitized cause. */
+fun userError(error: Throwable?): UserError? {
+    val seen = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Throwable, Boolean>())
+    var current = error
+    while (current != null && seen.add(current)) {
+        if (current is UserError) return current
+        current = current.cause
+    }
+    return null
+}
+
+fun readableError(error: Throwable): String = userError(error)?.message ?: when (error) {
     is InvalidMediaRange -> error.message ?: "下载分段信息不匹配"
     is UserError -> error.message ?: "暂时无法完成，请稍后重试"
     is java.net.UnknownHostException -> "暂无网络，已保留播放位置"

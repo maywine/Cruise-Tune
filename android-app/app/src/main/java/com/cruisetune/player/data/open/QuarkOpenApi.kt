@@ -103,6 +103,15 @@ class QuarkOpenApi(
             if (errno == 11017 && !replayed) { replayed = true; continue }
             if (errno == 11000) throw UserError("开放平台授权已失效，请重新授权", true)
             if (errno == 12003 || errno == 12004) throw UserError("开放平台客户端配置已失效，请检查连接服务")
+            if (errno == 23018) {
+                val bytes = Regex("^download file size limit\\[(\\d+)\\]$")
+                    .matchEntire(result.data?.optString("error_info").orEmpty())?.groupValues?.get(1)?.toLongOrNull()
+                val limit = bytes?.takeIf { it > 0 }?.let {
+                    if (it % 1048576L == 0L) "${it / 1048576L} MiB" else "$it 字节"
+                }
+                // A provider file-size restriction cannot be repaired by network retries or token rotation.
+                throw UserError(if (limit != null) "文件超过夸克当前的下载上限（$limit）" else "夸克限制了该文件下载，请检查网盘下载权限")
+            }
             if (result.code == 403) throw UserError("当前授权范围不允许读取该文件或目录")
             if (result.code !in 200..299) throw UserError("开放平台暂时无法读取，请稍后重试", retryable = result.code in listOf(408, 425) || result.code >= 500)
             val json = result.data ?: throw UserError("开放平台响应格式不正确")

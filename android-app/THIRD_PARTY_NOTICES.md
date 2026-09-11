@@ -11,6 +11,8 @@
 
 夸克目录与下载字段还交叉查阅了 OpenList 的 quark_uc 驱动文档与源码；仅作为协议行为资料，没有将其 Go 实现加入 APK。
 
+网页登录大文件取址的 PC 请求字段与 User-Agent 兼容行为参考 QuarkPanTool（https://github.com/ihmily/QuarkPanTool，版本 0ecfbb0152da0d3364bbee32cbf30a1b0ab31b4a）；未引入或执行其 Python 程序。
+
 AndroidX、Media3、Kotlin、OkHttp 与 ZXing 均通过各自公开发布的依赖使用，版本固定在 app/build.gradle.kts。各依赖按其原许可使用。
 
 ## QuarkPan MIT 许可

@@ -9,7 +9,7 @@ import android.os.SystemClock
 import java.util.concurrent.atomic.AtomicLong
 import com.cruisetune.player.core.*
 
-class LibraryDatabase(context: Context) : SQLiteOpenHelper(context, "cruise-library.db", null, 1) {
+class LibraryDatabase(context: Context) : SQLiteOpenHelper(context, "cruise-library.db", null, 2) {
     companion object {
         const val WAL_CHECKPOINT_PAGES = 256
         const val WAL_RETAIN_BYTES = 1024 * 1024
@@ -28,8 +28,44 @@ class LibraryDatabase(context: Context) : SQLiteOpenHelper(context, "cruise-libr
         db.execSQL("CREATE TABLE queue_items(revision INTEGER NOT NULL, ordinal INTEGER NOT NULL, original INTEGER NOT NULL, track_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(revision,ordinal))")
         db.execSQL("CREATE INDEX queue_tracks ON queue_items(track_id)")
         db.execSQL("CREATE TABLE checkpoints(id INTEGER PRIMARY KEY, revision INTEGER NOT NULL, item_index INTEGER NOT NULL, position INTEGER NOT NULL, intent INTEGER NOT NULL, repeat_mode INTEGER NOT NULL, shuffled INTEGER NOT NULL)")
+        createSourceRegistry(db)
     }
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) { if (oldVersion < 2) createSourceRegistry(db) }
+    private fun createSourceRegistry(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE source_paths(source_id TEXT PRIMARY KEY, path TEXT NOT NULL)")
+        db.execSQL("CREATE TABLE source_access(kind TEXT NOT NULL, account TEXT NOT NULL, root_key TEXT NOT NULL, source_id TEXT NOT NULL, PRIMARY KEY(kind,account,root_key))")
+    }
+    private fun rootKey(source: MusicSource) = if (source.kind == SourceKind.QUARK_OPEN)
+        com.cruisetune.player.data.open.openFileIdentity(source.rootId) else source.rootId
+    fun existingSource(access: MusicSource): MusicSource? {
+        val all = sources()
+        val linked = readableDatabase.rawQuery("SELECT source_id FROM source_access WHERE kind=? AND account=? AND root_key=?",
+            arrayOf(access.kind.name, access.accountId, rootKey(access))).use { if (it.moveToFirst()) it.getString(0) else null }
+        return all.firstOrNull { it.id == linked } ?: all.firstOrNull {
+            it.kind == access.kind && it.accountId == access.accountId && rootKey(it) == rootKey(access)
+        }
+    }
+    fun matchingSourcePaths(access: MusicSource, path: String): List<MusicSource> {
+        if (path.isBlank() || access.kind == SourceKind.LOCAL) return emptyList()
+        val paths = readableDatabase.rawQuery("SELECT source_id,path FROM source_paths", null).use { c ->
+            buildMap { while(c.moveToNext()) put(c.getString(0), c.getString(1)) }
+        }
+        // These are candidates for explicit user confirmation, never evidence of account identity.
+        return sources().filter { it.kind != SourceKind.LOCAL && it.kind != access.kind &&
+            (paths[it.id] == path || it.title == access.title) }
+    }
+    fun registerAccess(access: MusicSource, existingId: String, path: String) = transaction { db ->
+        check(sources().any { it.id == existingId })
+        db.insertWithOnConflict("source_access", null, ContentValues().apply {
+            put("kind",access.kind.name);put("account",access.accountId);put("root_key",rootKey(access));put("source_id",existingId)
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+        if (path.isNotBlank()) db.insertWithOnConflict("source_paths",null,ContentValues().apply {
+            put("source_id",existingId);put("path",path)
+        },SQLiteDatabase.CONFLICT_REPLACE)
+    }
+    fun forgetAccess(kind: SourceKind, account: String) = transaction { db ->
+        db.delete("source_access","kind=? AND account=?",arrayOf(kind.name,account))
+    }
 
     fun sources(): List<MusicSource> = readableDatabase.rawQuery("SELECT * FROM sources ORDER BY rowid", null).use { c ->
         buildList { while (c.moveToNext()) add(MusicSource(c.getString(0), SourceKind.valueOf(c.getString(1)), c.getString(2), c.getString(3), c.getString(4), c.getInt(5) == 1)) }
@@ -54,6 +90,11 @@ class LibraryDatabase(context: Context) : SQLiteOpenHelper(context, "cruise-libr
         return readableDatabase.rawQuery("SELECT payload FROM queue_items WHERE track_id=? ORDER BY revision DESC LIMIT 1", arrayOf(id)).use { c ->
             if (c.moveToFirst()) runCatching { JsonCodec.decode(c.getString(0)) }.getOrNull() else null
         }
+    }
+    fun trackIdsForSources(ids: Set<String>): Set<String> = buildSet {
+        ids.forEach { source -> readableDatabase.rawQuery("SELECT id FROM tracks WHERE source_id=?", arrayOf(source)).use { c ->
+            while(c.moveToNext()) add(c.getString(0))
+        } }
     }
     fun replaceScan(sourceId: String, found: List<Track>, retainedTrackIds: Set<String>? = emptySet()) = transaction { db ->
         db.execSQL("UPDATE tracks SET present=0 WHERE source_id=?", arrayOf(sourceId))
@@ -92,6 +133,24 @@ class LibraryDatabase(context: Context) : SQLiteOpenHelper(context, "cruise-libr
                 db.execSQL("DELETE FROM queue_items WHERE revision=? AND revision NOT IN (SELECT revision FROM checkpoints)", arrayOf(oldBackup))
             }
         }
+    }
+    fun removeSources(ids: Set<String>, remaining: PlaybackSnapshot) = transaction { db ->
+        require(remaining.entries.none { it.track.sourceId in ids })
+        // Retire both snapshots so an old backup cannot restore a removed source.
+        db.delete("queue_items", null, null); db.delete("checkpoints", null, null)
+        ids.forEach { id ->
+            db.delete("tracks", "source_id=?", arrayOf(id))
+            db.delete("sources", "id=?", arrayOf(id))
+            db.delete("source_paths", "source_id=?", arrayOf(id))
+            db.delete("source_access", "source_id=?", arrayOf(id))
+        }
+        remaining.entries.forEachIndexed { index, entry ->
+            db.insertOrThrow("queue_items", null, ContentValues().apply {
+                put("revision", remaining.revision); put("ordinal", index); put("original", entry.originalIndex)
+                put("track_id", entry.track.id); put("payload", JsonCodec.encode(entry.track))
+            })
+        }
+        if (remaining.entries.isNotEmpty()) writeCheckpoint(db, remaining)
     }
     fun restore(): PlaybackSnapshot = readableDatabase.rawQuery("SELECT revision,item_index,position,intent,repeat_mode,shuffled FROM checkpoints ORDER BY id", null).use { c ->
         while (c.moveToNext()) {
