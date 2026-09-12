@@ -6,6 +6,7 @@
     <item type="id" name="player_status" />
     <item type="id" name="player_times" />
     <item type="id" name="player_tabs" />
+    <item type="id" name="player_sort" />
     <item type="id" name="player_list" />
     <item type="id" name="player_footer" />
     <item type="id" name="player_previous" />

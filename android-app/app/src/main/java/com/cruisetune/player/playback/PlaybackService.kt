@@ -26,6 +26,7 @@ class PlaybackService : MediaLibraryService() {
     companion object {
         const val PLAY_TRACK = "cruise.play_track"
         const val SHUFFLE = "cruise.shuffle"
+        const val SORT_QUEUE = "cruise.sort_queue"
         const val RESUME_ON_OPEN = "cruise.resume_open"
         const val RETRY = "cruise.retry"
         const val REMOVE_SOURCE = "cruise.remove_source"
@@ -45,6 +46,7 @@ class PlaybackService : MediaLibraryService() {
     private var entries = emptyList<QueueEntry>()
     private var revision = 0L
     private var shuffled = false
+    private var queueSort: TrackSort? = null
     private var applying = false
     private var persistedIntent = false
     private var screenOffObserved = false
@@ -105,6 +107,7 @@ class PlaybackService : MediaLibraryService() {
         scope.launch {
             val saved = withContext(Dispatchers.IO) { app.database.restore() }
             entries = saved.entries; revision = saved.revision; shuffled = saved.shuffled; persistedIntent = saved.playIntent
+            queueSort = app.preferences.getString(TrackSort.QUEUE_PREFERENCE, null)?.let(TrackSort::fromPreference)
             if (entries.isNotEmpty()) {
                 applying = true
                 player.setMediaItems(entries.map { app.media.mediaItem(it.track) }, saved.index, saved.positionMs)
@@ -146,12 +149,13 @@ class PlaybackService : MediaLibraryService() {
     private fun snapshot() = PlaybackSnapshot(revision, entries, player.currentMediaItemIndex.coerceAtLeast(0), if (player.playbackState == Player.STATE_ENDED) 0 else player.currentPosition.coerceAtLeast(0), persistedIntent, player.repeatMode, shuffled)
     private fun persist() { if (!applying && entries.isNotEmpty()) save(snapshot()) }
     private fun updateExtras(error: String? = null) {
-        session.setSessionExtras(Bundle().apply { putBoolean("shuffled", shuffled); putBoolean("needsLogin", userError(player.playerError)?.needsLogin == true); if (packageName.endsWith(".authcheck")) putString("prefetchGate", prefetchGate); (capacityMessage ?: prefetchMessage)?.let { putString("prefetchStatus", it) };
+        session.setSessionExtras(Bundle().apply { putBoolean("shuffled", shuffled); if(entries.isNotEmpty())queueSort?.let { putString("queueSort", it.name) }; putBoolean("needsLogin", userError(player.playerError)?.needsLogin == true); if (packageName.endsWith(".authcheck")) putString("prefetchGate", prefetchGate); (capacityMessage ?: prefetchMessage)?.let { putString("prefetchStatus", it) };
             (error ?: player.playerError?.let { readableError(it.cause ?: it) })?.let { putString("error", it) } })
     }
     private suspend fun playTrack(id: String, sourceId: String?) {
         ready.await()
-        val tracks = withContext(Dispatchers.IO) { app.database.tracks(sourceId).let { list ->
+        val order = TrackSort.fromPreference(app.preferences.getString(TrackSort.PREFERENCE, null))
+        val tracks = withContext(Dispatchers.IO) { order.sorted(app.database.tracks(sourceId)).let { list ->
             if (list.any { it.id == id }) list else listOfNotNull(app.database.findTrack(id))
         } }
         if (screenOff.isScreenOff()) { pauseForScreenOff(); return }
@@ -164,6 +168,7 @@ class PlaybackService : MediaLibraryService() {
         save(PlaybackSnapshot(revision, entries, index, 0, true, player.repeatMode, false), true)
         player.setMediaItems(tracks.map(app.media::mediaItem), index, 0)
         prepareAndPlay()
+        rememberQueueSort(order)
         applying = false; updateExtras(); cancelPrefetch()
     }
     private suspend fun removeSources(ids: Set<String>) {
@@ -203,6 +208,26 @@ class PlaybackService : MediaLibraryService() {
         player.setMediaItems(entries.map { app.media.mediaItem(it.track) }, index, position)
         player.prepare(); player.playWhenReady = playing
         applying = false; updateExtras(); cancelPrefetch()
+    }
+    private fun sortQueue(order: TrackSort) {
+        if (entries.isEmpty()) return
+        val sorted = order.queue(snapshot(), maxOf(revision + 1, System.currentTimeMillis()))
+        applying = true
+        try {
+            // Move existing media items so the active decoder, buffer and position survive sorting.
+            sorted.entries.forEachIndexed { target, entry ->
+                val from = (target until player.mediaItemCount).first { player.getMediaItemAt(it).mediaId == entry.track.id }
+                if (from != target) player.moveMediaItem(from, target)
+            }
+            entries = sorted.entries; revision = sorted.revision; shuffled = false
+            save(snapshot(), true)
+            rememberQueueSort(order)
+        } finally { applying = false }
+        updateExtras(); cancelPrefetch(); maybePrefetch()
+    }
+    private fun rememberQueueSort(order: TrackSort) {
+        queueSort = order
+        app.preferences.edit().putString(TrackSort.QUEUE_PREFERENCE, order.name).apply()
     }
     private fun cancelPrefetch() { prefetch.cancel() }
     private fun maybePrefetch() {
@@ -249,7 +274,7 @@ class PlaybackService : MediaLibraryService() {
     private inner class Callbacks : MediaLibrarySession.Callback {
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
             val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
-            if (controller.packageName == packageName) listOf(PLAY_TRACK, SHUFFLE, RESUME_ON_OPEN, RETRY, REMOVE_SOURCE, DISCONNECT_TOKEN).forEach { commands.add(SessionCommand(it, Bundle.EMPTY)) }
+            if (controller.packageName == packageName) listOf(PLAY_TRACK, SHUFFLE, SORT_QUEUE, RESUME_ON_OPEN, RETRY, REMOVE_SOURCE, DISCONNECT_TOKEN).forEach { commands.add(SessionCommand(it, Bundle.EMPTY)) }
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session).setAvailableSessionCommands(commands.build())
                 .setAvailablePlayerCommands(Player.Commands.Builder().addAllCommands().remove(Player.COMMAND_CHANGE_MEDIA_ITEMS).build()).build()
         }
@@ -260,6 +285,7 @@ class PlaybackService : MediaLibraryService() {
                 when (customCommand.customAction) {
                     PLAY_TRACK -> playTrack(args.getString("trackId") ?: "", args.getString("sourceId"))
                     SHUFFLE -> toggleShuffle()
+                    SORT_QUEUE -> sortQueue(TrackSort.fromPreference(args.getString("sort")))
                     RESUME_ON_OPEN -> if (app.preferences.getBoolean("resumeOnOpen", false) && persistedIntent && entries.isNotEmpty()) { prepareAndPlay() }
                     REMOVE_SOURCE -> removeSources(setOf(args.getString("sourceId") ?: throw UserError("请选择要移除的目录")))
                     DISCONNECT_TOKEN -> {

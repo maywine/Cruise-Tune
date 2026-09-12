@@ -71,7 +71,7 @@ class UiReviewFixesTest {
             try {
                 val a=controller.get();measure(a,w,h)
                 val root=a.findViewById<View>(R.id.player_root);val rootRect=Rect();root.getGlobalVisibleRect(rootRect)
-                for(id in listOf(R.id.player_status,R.id.player_seek,R.id.player_times,R.id.player_tabs,R.id.player_previous,R.id.player_play,R.id.player_next)) {
+                for(id in listOf(R.id.player_status,R.id.player_seek,R.id.player_times,R.id.player_tabs,R.id.player_sort,R.id.player_previous,R.id.player_play,R.id.player_next)) {
                     val v=a.findViewById<View>(id);val visible=Rect()
                     assertTrue("$w x $h, font $font: hidden $id",v.getGlobalVisibleRect(visible))
                     assertEquals("$w x $h: clipped width $id",v.width,visible.width())
@@ -210,7 +210,29 @@ class UiReviewFixesTest {
             assertTrue(labels.indexOf("我的收藏")<labels.indexOf("添加音乐目录"))
             assertTrue(labels.indexOf("我的收藏")<labels.indexOf("账号管理"))
             assertFalse(labels.contains("重新网页登录"))
+            views(dialog.window!!.decorView).filterIsInstance<TouchButton>().single { it.text.toString()=="移除目录" }.performClick()
+            val confirmation=ShadowDialog.getLatestDialog() as AlertDialog
+            assertTrue(views(confirmation.window!!.decorView).filterIsInstance<TextView>().any { it.text.toString()=="移除 我的收藏" })
+            assertTrue(confirmation.findViewById<TextView>(android.R.id.message)!!.text.toString().contains("原始音乐文件和其他目录不受影响"))
+            confirmation.getButton(AlertDialog.BUTTON_NEGATIVE).performClick()
+            assertEquals("source",ReflectionHelpers.getField<com.cruisetune.player.data.LibraryState>(a,"library").sources.single().id)
         } finally {controller.pause().stop().destroy()}
+    }
+    @Test fun librarySortIsVisibleAndSurvivesRecreation() {
+        val app=RuntimeEnvironment.getApplication() as CruiseApplication
+        val controller=Robolectric.buildActivity(MainActivity::class.java).create().start().resume().visible()
+        try {
+            val a=controller.get()
+            a.findViewById<View>(R.id.player_sort).performClick()
+            val dialog=ShadowDialog.getLatestDialog()
+            views(dialog.window!!.decorView).filterIsInstance<android.widget.RadioButton>().single { it.text.toString()=="歌曲名称降序" }.performClick()
+            assertEquals("TITLE_DESC",app.preferences.getString("trackSort",null))
+            controller.recreate()
+            controller.get().findViewById<View>(R.id.player_sort).performClick()
+            val restored=ShadowDialog.getLatestDialog()
+            val choice=views(restored.window!!.decorView).filterIsInstance<android.widget.RadioButton>().single { it.text.toString()=="歌曲名称降序" }
+            assertTrue(choice.isChecked)
+        } finally {controller.pause().stop().destroy();app.preferences.edit().remove("trackSort").commit()}
     }
     @Test fun unknownDurationIsNotDisplayedAsZero() {
         val controller=Robolectric.buildActivity(MainActivity::class.java).create().start().resume().visible()

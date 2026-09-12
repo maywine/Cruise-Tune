@@ -165,3 +165,23 @@ BlueStacks 实测：仅清空指定曲目的临时流缓存（确认无离线缓
 继续播放、自动切歌、拖动进度后继续播放和暂停已实测。绘制采样 2,156 帧，janky frames 为 71（3.29%），P50/P90/P95/P99：6/15/23/57 ms；这是包括切歌、封面及拖动的短时采样，没有进行同负载旧版对照或持续下载压力测试，不作为声音卡顿已解决的证据。测试结束暂停于约 2:43，显示设置均恢复，保持调试开启。未覆盖完整日夜主题矩阵、TalkBack 语音、实车电源与音质。
 
 安装包 SHA-256：`986bf0f1997af0f559a703d7cd433fd46e944107bed1e1875e673530ee411271`。签名 SHA-256：`6fc4d5fc1c0ac009fd2248e0fd200e9eda1c43242ec61ff4c6a3867cb91056c5`，与旧版一致。下载目录副本与本次测试包相同；未创建 Git 标签或发布 Release。
+
+## 目录与排序设备回归
+
+目录管理、提示消息与队列排序的设备回归使用合成音频，只允许运行在曲库和队列均为空的独立验证包中：
+
+```sh
+./gradlew -PdeviceTestBuildType=authCheck :app:assembleAuthCheck :app:assembleAuthCheckAndroidTest
+adb install -r app/build/outputs/apk/authCheck/app-authCheck.apk
+adb install -r app/build/outputs/apk/androidTest/authCheck/app-authCheck-androidTest.apk
+adb shell am instrument -w -r -e class com.cruisetune.player.LibraryActionsDeviceTest \
+  com.cruisetune.player.authcheck.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+设备测试需实际报告 `OK (1 test)`，不能只看 `adb` 的退出码。测试覆盖曲库更新提示、自然排序、排序时保留当前歌曲和进度、播放与暂停状态、排序持久化、取消移除及确认后的清理范围；结束时清理自身创建的条目和音频。真实网盘连接与系统目录选择器需另外实测。
+
+0.5.13 回归：BlueStacks Android 7.1.1（API 25）的添加目录崩溃源于 `Toast.makeText(Activity)`，系统提示布局经 AppCompat 字体解析时抛出 `ArrayIndexOutOfBoundsException`。主界面和网页登录提示改用应用上下文。129 项主机测试（零失败、错误、跳过）、lintDebug 和独立验证包构建通过；上述设备回归报告 `OK (1 test)`，并验证曲库和队列的排序选中态相互独立、空队列从所选排序的第一首开始播放。
+
+独立验证包中通过系统目录选择器添加合成音乐目录，包含一个子目录，共读出 3 首；重复添加仍为 3 首，没有闪退。通过界面移除后原始测试音频仍在。本轮未覆盖真实网盘账号联调。
+
+按 apple-design 对本次交互做实屏 review：修正曲库与队列的选中态混用，以及空队列开始播放时忽略排序的问题；排序面板改用单选列表，普通横屏四个选项完整可见，360×640 dp、1.6 倍字体下文字可换行并可滚动。最终界面改动后复验 13 项界面测试、lintDebug 和设备回归，均通过。未进行 TalkBack 语音与实车音质验收。

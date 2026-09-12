@@ -172,6 +172,6 @@ class QuarkLoginActivity : CruiseActivity() {
             } finally { connecting = false }
         }
     }
-    private fun toast(message: String) { Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
+    private fun toast(message: String) { Toast.makeText(applicationContext, message, Toast.LENGTH_LONG).show() }
     override fun onDestroy() { web?.destroy(); super.onDestroy() }
 }

@@ -255,6 +255,10 @@ class MainActivity : CruiseActivity() {
         queueTab=TouchButton(this,"队列").apply{minHeight=dp(tabHeight);textSize=20f;setPadding(dp(8),0,dp(8),0);maxLines=1;setOnClickListener{showingQueue=true;renderList()}}
         libraryTab=TouchButton(this,"曲库").apply{minHeight=dp(tabHeight);textSize=20f;setPadding(dp(8),0,dp(8),0);maxLines=1;setOnClickListener{showingQueue=false;renderList()}}
         tabs.addView(queueTab,LinearLayout.LayoutParams(0,dp(tabHeight),1f));tabs.addView(libraryTab,LinearLayout.LayoutParams(0,dp(tabHeight),1f).apply{marginStart=dp(8)});lists.addView(tabs)
+        tabs.addView(TouchButton(this,"排序").apply {
+            id=R.id.player_sort;minHeight=dp(tabHeight);textSize=18f;setPadding(dp(4),0,dp(4),0);maxLines=1
+            setOnClickListener { showTrackSort() }
+        },LinearLayout.LayoutParams(dp(72),dp(tabHeight)).apply { marginStart=dp(8) })
         listTitle=Design.label(this,"还没有音乐",if(compact)16f else 19f,Design.secondary).apply{maxLines=1;ellipsize=TextUtils.TruncateAt.END;setPadding(dp(4),dp(if(compact)6 else 12),0,dp(if(compact)4 else 8))};lists.addView(listTitle)
         val frame=FrameLayout(this)
         adapter=TrackAdapter(compact){track ->
@@ -284,7 +288,7 @@ class MainActivity : CruiseActivity() {
             else if(c.isPlaying||c.playWhenReady)c.pause()
             else if(c.mediaItemCount>0){if(c.playbackState==Player.STATE_ENDED)c.seekTo(0);c.prepare();c.play();askNotificationPermission()}
             else if(library.tracks.isEmpty())showSources()
-            else library.tracks.firstOrNull()?.let{command(PlaybackService.PLAY_TRACK,Bundle().apply{putString("trackId",it.id)});askNotificationPermission()}
+            else libraryTracks().firstOrNull()?.let{command(PlaybackService.PLAY_TRACK,Bundle().apply{putString("trackId",it.id);selectedSource?.let{source->putString("sourceId",source)}});askNotificationPermission()}
         }}
         addFooter(previous,1f);addFooter(play,1.3f);addFooter(next,1f)
         footer.addView(row,FrameLayout.LayoutParams(-1,-2,Gravity.CENTER))
@@ -299,7 +303,7 @@ class MainActivity : CruiseActivity() {
         val tracks = if (showingQueue && c != null) (0 until c.mediaItemCount).mapNotNull { index ->
             val item = c.getMediaItemAt(index)
             item.mediaMetadata.extras?.getString("track")?.let { runCatching { JsonCodec.decode(it) }.getOrNull() }
-        } else library.tracks.filter { selectedSource == null || it.sourceId == selectedSource }
+        } else libraryTracks()
         if (adapter.currentList != tracks) adapter.submitList(tracks) { pendingListPosition?.let { recycler.layoutManager?.onRestoreInstanceState(it) }; pendingListPosition = null }
         adapter.updatePlayback(c?.currentMediaItem?.mediaId, playbackLabel(c))
         empty.visibility = if (tracks.isEmpty()) View.VISIBLE else View.GONE
@@ -311,6 +315,36 @@ class MainActivity : CruiseActivity() {
             listTitle.text = "$mode · $name · ${tracks.size} 首"
             listTitle.contentDescription = "${PlaybackModes.label(c?.repeatMode ?: Player.REPEAT_MODE_OFF)}，$name，${tracks.size} 首"
         }
+    }
+    private fun trackSort() = TrackSort.fromPreference(app.preferences.getString(TrackSort.PREFERENCE, null))
+    private fun libraryTracks() = trackSort().sorted(library.tracks.filter { selectedSource == null || it.sourceId == selectedSource })
+    private fun showTrackSort() {
+        val (dialog, content) = panel(if (showingQueue) "队列排序" else "曲库排序")
+        paragraph(content, if (showingQueue) "调整播放队列顺序，保留当前歌曲和播放进度。" else "选择歌曲排列方式，点播时按此顺序建立队列。")
+        val selected = if (!showingQueue) trackSort() else {
+            val extras = controller?.sessionExtras
+            if (extras?.getBoolean("shuffled") == true) null
+            else extras?.getString("queueSort")?.let(TrackSort::fromPreference)
+        }
+        if (showingQueue && controller?.sessionExtras?.getBoolean("shuffled") == true) paragraph(content,"当前为随机播放，选择排序后将按所选顺序播放。")
+        val choices = RadioGroup(this)
+        content.addView(choices)
+        TrackSort.entries.forEach { order ->
+            choices.addView(RadioButton(this).apply {
+                id=View.generateViewId();text=order.label;textSize=21f;minHeight=dp(64);maxLines=2
+                setTextColor(Design.text);isChecked=order == selected
+                buttonTintList=ColorStateList(arrayOf(intArrayOf(android.R.attr.state_checked),intArrayOf()),intArrayOf(Design.accent,Design.secondary))
+                setOnClickListener {
+                    if (showingQueue) command(PlaybackService.SORT_QUEUE, Bundle().apply { putString("sort", order.name) })
+                    else {
+                        app.preferences.edit().putString(TrackSort.PREFERENCE, order.name).apply()
+                        renderList()
+                    }
+                    dialog.dismiss()
+                }
+            },RadioGroup.LayoutParams(-1,-2))
+        }
+        showPanel(dialog)
     }
     private fun renderPlayer() {
         if (!::title.isInitialized) return
@@ -409,10 +443,16 @@ class MainActivity : CruiseActivity() {
         if (library.sources.isNotEmpty()) {
             section(content, "我的音乐目录")
             library.sources.forEach { source ->
-                val row = LinearLayout(this)
+                val row = LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
                 val displayTitle = if(library.sources.count { it.title == source.title } > 1) source.title + when(source.kind) { SourceKind.LOCAL -> " · 本地"; SourceKind.QUARK -> " · 网页"; SourceKind.QUARK_OPEN -> " · Token" } else source.title
-                row.addView(TouchButton(this, displayTitle).apply { maxLines=1; setOnClickListener { selectedSource=source.id;showingQueue=false;renderList();dialog.dismiss() } },LinearLayout.LayoutParams(0,-2,1f))
-                row.addView(TouchButton(this,"管理").apply { textSize=18f;setPadding(dp(8),0,dp(8),0);setOnClickListener { dialog.dismiss();showSourceManagement(source) } },LinearLayout.LayoutParams(dp(80),dp(76)).apply { marginStart=dp(8) })
+                row.addView(TouchButton(this, displayTitle).apply { maxLines=2; setOnClickListener { selectedSource=source.id;showingQueue=false;renderList();dialog.dismiss() } },LinearLayout.LayoutParams(-1,-2))
+                val actions = LinearLayout(this)
+                actions.addView(TouchButton(this,"管理").apply { textSize=18f;setOnClickListener { dialog.dismiss();showSourceManagement(source) } },LinearLayout.LayoutParams(0,-2,1f))
+                actions.addView(TouchButton(this,"移除目录",destructive=true).apply {
+                    textSize=18f;contentDescription="移除目录：$displayTitle"
+                    setOnClickListener { dialog.dismiss();confirmSourceRemoval(source) }
+                },LinearLayout.LayoutParams(0,-2,1f).apply { marginStart=dp(8) })
+                row.addView(actions,LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(4) })
                 content.addView(row,LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(8) })
             }
             action(content,"查看全部音乐") { selectedSource=null;showingQueue=false;renderList();dialog.dismiss() }
@@ -433,12 +473,15 @@ class MainActivity : CruiseActivity() {
         action(content,"刷新音乐目录") { dialog.dismiss();app.scope.launch { app.library.scan(source) } }
         action(content,"移除音乐目录",destructive=true) {
             dialog.dismiss()
-            confirmLocalRemoval("移除 ${source.title}","读取方式：$method。移除此目录的本机曲库、队列条目和离线缓存，网盘文件不会删除。") {
-                if(selectedSource == source.id) selectedSource=null
-                command(PlaybackService.REMOVE_SOURCE,Bundle().apply { putString("sourceId",source.id) })
-            }
+            confirmSourceRemoval(source)
         }
         showPanel(dialog)
+    }
+    private fun confirmSourceRemoval(source: MusicSource) {
+        confirmLocalRemoval("移除 ${source.title}","移除此目录的本机曲库、队列条目和离线缓存。原始音乐文件和其他目录不受影响。") {
+            if(selectedSource == source.id) selectedSource=null
+            command(PlaybackService.REMOVE_SOURCE,Bundle().apply { putString("sourceId",source.id) })
+        }
     }
     private fun showAddSource() {
         val (dialog, content)=panel("添加音乐目录")
@@ -802,7 +845,8 @@ class MainActivity : CruiseActivity() {
         val seconds = milliseconds.coerceAtLeast(0) / 1000
         return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60)
     }
-    private fun toast(text: String) { Toast.makeText(this, text, Toast.LENGTH_LONG).show() }
+    // Older ROMs' system Toast layouts can fail in the Activity's AppCompat inflater.
+    private fun toast(text: String) { Toast.makeText(applicationContext, text, Toast.LENGTH_LONG).show() }
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString("source",selectedSource);outState.putBoolean("queue",showingQueue)
         settingsDialog?.takeIf { it.isShowing }?.let { outState.putBoolean("settingsOpen",true);outState.putInt("settingsScroll",panels[it]?.scroll?.scrollY ?: 0) }

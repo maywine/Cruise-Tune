@@ -60,6 +60,7 @@ android {
             matchingFallbacks += "debug"
         }
     }
+    testBuildType = providers.gradleProperty("deviceTestBuildType").getOrElse("debug")
     testOptions { unitTests.isIncludeAndroidResources = true }
     lint { abortOnError = true }
 }

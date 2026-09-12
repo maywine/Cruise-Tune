@@ -24,6 +24,8 @@
 
 真实账号联调需用户在验证设备上自行扫码。常规单元测试使用本地模拟响应，不需要网盘凭证。
 
+设备回归命令、测试数据与结果判定见 [测试说明](TESTING.md)。
+
 直接扫码客户端配置保存在 Git 忽略的 `app/src/main/assets/quark_cli_client.json`；空模板位于 `config/quark_cli_client.example.json`。配置方式见 [夸克接入说明](../docs/quark-integration.md)。
 
 ## 交付和兼容
