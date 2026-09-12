@@ -213,7 +213,7 @@ class MainActivity : CruiseActivity() {
         root.addView(header,LinearLayout.LayoutParams(-1,dp(headerHeight)))
 
         val body=LinearLayout(this).apply { orientation=if(spec.landscape)LinearLayout.HORIZONTAL else LinearLayout.VERTICAL }
-        val now=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(if(compact)12 else 20),dp(if(compact)8 else 20),dp(if(compact)12 else 20),dp(if(compact)8 else 16)); background=Design.surface(Design.panel,dp(24).toFloat()) }
+        val now=LinearLayout(this).apply { id=R.id.player_now;orientation=LinearLayout.VERTICAL;setPadding(dp(if(compact)12 else 20),dp(if(compact)8 else 20),dp(if(compact)12 else 20),dp(if(compact)8 else 16));background=Design.surface(Design.panel,dp(24).toFloat()) }
         if(!compact)now.addView(banner,LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(12)})
         val info=LinearLayout(this).apply{gravity=Gravity.CENTER_VERTICAL}
         cover=CoverView(this).apply{visibility=if(spec.showCover)View.VISIBLE else View.GONE}
@@ -242,8 +242,12 @@ class MainActivity : CruiseActivity() {
         times.addView(elapsed,LinearLayout.LayoutParams(0,-2,1f));times.addView(duration,LinearLayout.LayoutParams(0,-2,1f));now.addView(times)
         offline=TouchButton(this,"保留离线").apply{setOnClickListener{keepCurrentOffline()}}
         if(!compact && config.screenHeightDp>=700)now.addView(offline,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(12)})
-        if(spec.landscape)body.addView(now,LinearLayout.LayoutParams(0,-2,1f).apply{marginEnd=dp(16)})
-        else body.addView(now,LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(8)})
+        val playbackColumn = if(spec.landscape) LinearLayout(this).apply {
+            orientation=LinearLayout.VERTICAL
+            addView(now,LinearLayout.LayoutParams(-1,0,1f))
+            body.addView(this,LinearLayout.LayoutParams(0,-1,1f).apply{marginEnd=dp(16)})
+        } else null
+        if(!spec.landscape)body.addView(now,LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(8)})
 
         val lists=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
         val tabs=LinearLayout(this).apply{id=R.id.player_tabs}
@@ -283,7 +287,10 @@ class MainActivity : CruiseActivity() {
             else library.tracks.firstOrNull()?.let{command(PlaybackService.PLAY_TRACK,Bundle().apply{putString("trackId",it.id)});askNotificationPermission()}
         }}
         addFooter(previous,1f);addFooter(play,1.3f);addFooter(next,1f)
-        footer.addView(row,FrameLayout.LayoutParams(-1,-2,Gravity.CENTER));root.addView(footer,LinearLayout.LayoutParams(-1,-2));setContentView(root)
+        footer.addView(row,FrameLayout.LayoutParams(-1,-2,Gravity.CENTER))
+        if(spec.landscape)playbackColumn!!.addView(footer,LinearLayout.LayoutParams(-1,-2))
+        else root.addView(footer,LinearLayout.LayoutParams(-1,-2))
+        setContentView(root)
     }
     private fun renderList() {
         if (!::adapter.isInitialized) return

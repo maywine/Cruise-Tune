@@ -83,6 +83,15 @@ class UiReviewFixesTest {
                     assertTrue("Time glyphs must fit: $w x $h font $font",text.layout.height<=text.height-text.compoundPaddingTop-text.compoundPaddingBottom)
                 }
                 assertTrue("The list must retain a useful viewport",a.findViewById<View>(R.id.player_list).height>=64)
+                if(w>h) {
+                    val now=Rect();val footer=Rect();val tabs=Rect()
+                    assertTrue(a.findViewById<View>(R.id.player_now).getGlobalVisibleRect(now))
+                    assertTrue(a.findViewById<View>(R.id.player_footer).getGlobalVisibleRect(footer))
+                    assertTrue(a.findViewById<View>(R.id.player_tabs).getGlobalVisibleRect(tabs))
+                    assertEquals("$w x $h: playback controls must align with the player panel",now.left,footer.left)
+                    assertEquals("$w x $h: playback controls must align with the player panel",now.right,footer.right)
+                    assertTrue("$w x $h: playback controls must stay outside the queue",footer.right<tabs.left)
+                }
             } finally {controller.pause().stop().destroy()}
         }
     }
