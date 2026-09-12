@@ -69,8 +69,6 @@ class MainActivity : CruiseActivity() {
     private lateinit var next: TouchButton
     private lateinit var recycler: RecyclerView
     private var pendingListPosition: Parcelable? = null
-    private lateinit var shuffle: TouchButton
-    private lateinit var repeat: TouchButton
     private lateinit var offline: TouchButton
     private lateinit var queueTab: TouchButton
     private lateinit var libraryTab: TouchButton
@@ -268,10 +266,8 @@ class MainActivity : CruiseActivity() {
         root.addView(body,LinearLayout.LayoutParams(-1,0,1f).apply{topMargin=dp(8)})
 
         val footer=FrameLayout(this).apply{id=R.id.player_footer;setPadding(0,dp(8),0,0)}
-        val row=BoundedControlRow(this,if(spec.showModes)720 else 480).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
+        val row=BoundedControlRow(this,480).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
         fun addFooter(button:TouchButton,weight:Float){button.minHeight=dp(76);button.setPadding(dp(8),0,dp(8),0);row.addView(button,LinearLayout.LayoutParams(0,dp(76),weight).apply{if(row.childCount>0)marginStart=dp(8)})}
-        shuffle=TouchButton(this,"随机").apply{setOnClickListener{command(PlaybackService.SHUFFLE)}}
-        repeat=TouchButton(this,"顺序").apply{setOnClickListener{showRepeatModePicker()}}
         previous=TouchButton(this,"上一首").apply{id=R.id.player_previous;textSize=if(compact)18f else 22f;setOnClickListener{controller?.let{if(it.hasPreviousMediaItem())it.seekToPreviousMediaItem()else it.seekTo(0)}}}
         next=TouchButton(this,"下一首").apply{id=R.id.player_next;textSize=if(compact)18f else 22f;setOnClickListener{controller?.seekToNextMediaItem()}}
         play=TouchButton(this,if(library.tracks.isEmpty())"添加" else "播放",true).apply{id=R.id.player_play;textSize=24f;setOnClickListener{
@@ -286,9 +282,7 @@ class MainActivity : CruiseActivity() {
             else if(library.tracks.isEmpty())showSources()
             else library.tracks.firstOrNull()?.let{command(PlaybackService.PLAY_TRACK,Bundle().apply{putString("trackId",it.id)});askNotificationPermission()}
         }}
-        if(spec.showModes)addFooter(shuffle,1f)
         addFooter(previous,1f);addFooter(play,1.3f);addFooter(next,1f)
-        if(spec.showModes)addFooter(repeat,1f)
         footer.addView(row,FrameLayout.LayoutParams(-1,-2,Gravity.CENTER));root.addView(footer,LinearLayout.LayoutParams(-1,-2));setContentView(root)
     }
     private fun renderList() {
@@ -304,8 +298,7 @@ class MainActivity : CruiseActivity() {
         empty.visibility = if (tracks.isEmpty()) View.VISIBLE else View.GONE
         empty.text = if (showingQueue) "队列还是空的\n从我的曲库选一首音乐" else "添加一个音乐目录\n喜欢的音乐，就在路上"
         listTitle.text = if (library.scanning != null) "正在读取目录 · ${library.scannedCount} 首" else "${if (showingQueue) "接下来播放" else library.sources.find { it.id == selectedSource }?.title ?: "全部音乐"} · ${tracks.size} 首"
-        val layout = resources.configuration.let { PlayerLayoutSpec.forWindow(it.screenWidthDp,it.screenHeightDp,it.fontScale) }
-        if (!layout.showModes && library.scanning == null) {
+        if (library.scanning == null) {
             val mode = when(c?.repeatMode) { Player.REPEAT_MODE_ONE -> "单曲"; Player.REPEAT_MODE_ALL -> "循环"; else -> "顺序" }
             val name = if(showingQueue) "队列" else library.sources.find { it.id == selectedSource }?.title ?: "曲库"
             listTitle.text = "$mode · $name · ${tracks.size} 首"
@@ -348,13 +341,7 @@ class MainActivity : CruiseActivity() {
         play.contentDescription = playAction.description
         previous.isEnabled = c.mediaItemCount > 0
         next.isEnabled = c.hasNextMediaItem()
-        shuffle.selectedState(c.sessionExtras.getBoolean("shuffled"))
-        repeat.updateText(when (c.repeatMode) { Player.REPEAT_MODE_ONE -> "单曲"; Player.REPEAT_MODE_ALL -> "循环"; else -> "顺序" })
-        repeat.contentDescription = "播放顺序"
         modeSetting?.updateText("播放顺序：${PlaybackModes.label(c.repeatMode)}")
-        ViewCompat.setStateDescription(repeat, when(c.repeatMode) { Player.REPEAT_MODE_ONE -> "单曲循环"; Player.REPEAT_MODE_ALL -> "列表循环"; else -> "顺序播放" })
-        shuffle.contentDescription = "随机播放"
-        ViewCompat.setStateDescription(shuffle, if(c.sessionExtras.getBoolean("shuffled")) "已开启" else "已关闭")
         banner.updateText(c.sessionExtras.getString("error") ?: when {
             c.playerError != null -> readableError(c.playerError?.cause ?: c.playerError!!)
             c.playWhenReady && c.playbackState == Player.STATE_BUFFERING -> "正在缓冲"

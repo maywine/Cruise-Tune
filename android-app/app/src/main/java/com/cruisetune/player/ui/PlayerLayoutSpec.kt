@@ -1,7 +1,7 @@
 package com.cruisetune.player.ui
 
 /** Layout decisions use logical window dimensions, never the physical screen's pixel count. */
-data class PlayerLayoutSpec(val landscape: Boolean, val compact: Boolean, val showModes: Boolean, val showCover: Boolean) {
+data class PlayerLayoutSpec(val landscape: Boolean, val compact: Boolean, val showCover: Boolean) {
     companion object {
         fun forWindow(widthDp: Int, heightDp: Int, fontScale: Float): PlayerLayoutSpec {
             val landscape = widthDp > heightDp
@@ -10,8 +10,7 @@ data class PlayerLayoutSpec(val landscape: Boolean, val compact: Boolean, val sh
             val expandedCard = 36f + 44f + 12f + expandedInfo + 64f + 24f * fontScale + if(heightDp >= 700) 88f else 0f
             val expandedMinimum = 48f + 14f + 80f + 84f + 64f + 38f * fontScale + expandedCard + 168f
             val compact = heightDp < 600 || (landscape && fontScale > 1.3f) || (!landscape && heightDp < expandedMinimum)
-            return PlayerLayoutSpec(landscape, compact, landscape && widthDp >= 900 && fontScale <= 1.3f,
-                (!compact || landscape) && fontScale <= 1.3f)
+            return PlayerLayoutSpec(landscape, compact, (!compact || landscape) && fontScale <= 1.3f)
         }
     }
 }

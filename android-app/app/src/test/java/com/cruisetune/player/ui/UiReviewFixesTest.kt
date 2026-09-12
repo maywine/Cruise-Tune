@@ -86,6 +86,23 @@ class UiReviewFixesTest {
             } finally {controller.pause().stop().destroy()}
         }
     }
+    @Test fun landscapeFooterKeepsPlaybackModesInSettings() {
+        RuntimeEnvironment.setQualifiers("w1280dp-h720dp-land-mdpi")
+        val controller=Robolectric.buildActivity(MainActivity::class.java).create().start().resume().visible()
+        try {
+            val a=controller.get();measure(a,1280,720)
+            val footer=a.findViewById<ViewGroup>(R.id.player_footer)
+            val controls=views(footer).filterIsInstance<TouchButton>()
+            assertEquals(listOf(R.id.player_previous,R.id.player_play,R.id.player_next),controls.map { it.id })
+            assertFalse(controls.any { it.text.toString() in listOf("随机","顺序","单曲","循环") })
+
+            views(a.window.decorView).filterIsInstance<TouchButton>().single { it.text.toString()=="设置" }.performClick()
+            val settings=ShadowDialog.getLatestDialog()
+            val actions=views(settings.window!!.decorView).filterIsInstance<TouchButton>().map { it.text.toString() }
+            assertTrue(actions.any { it.endsWith("随机播放") })
+            assertTrue(actions.any { it.startsWith("播放顺序：") })
+        } finally {controller.pause().stop().destroy()}
+    }
     @Test fun compactStatusKeepsFullErrorAvailableOnTap() {
         RuntimeEnvironment.setQualifiers("w640dp-h360dp-land-mdpi")
         RuntimeEnvironment.setFontScale(1.6f)
