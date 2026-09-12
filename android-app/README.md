@@ -26,6 +26,8 @@
 
 设备回归命令、测试数据与结果判定见 [测试说明](TESTING.md)。
 
+歌词从本地或已授权网盘目录中的同名 `.lrc` 文件读取，例如 `Song.flac` 对应 `Song.lrc`；暂不读取 FLAC 内嵌歌词。同曲目切换封面／歌词复用已读结果，刷新音乐目录会重新读取。小窗口通过“详情”或设置中的“封面与歌词”在页面内展开，歌名、进度和主要播放按钮始终可操作，返回后恢复列表位置。
+
 直接扫码客户端配置保存在 Git 忽略的 `app/src/main/assets/quark_cli_client.json`；空模板位于 `config/quark_cli_client.example.json`。配置方式见 [夸克接入说明](../docs/quark-integration.md)。
 
 ## 交付和兼容

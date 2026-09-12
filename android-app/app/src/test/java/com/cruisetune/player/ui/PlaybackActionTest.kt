@@ -8,6 +8,13 @@ import org.junit.Test
 import java.io.IOException
 
 class PlaybackActionTest {
+    @Test fun emptyLibraryOffersAnExplicitAddMusicAction() {
+        val action = PlaybackAction.choose(false, false, false, true, false)
+        assertEquals(PlaybackAction.ADD, action)
+        assertEquals("添加音乐", action.label)
+        assertEquals("添加音乐目录", action.description)
+        assertEquals(PlaybackAction.PLAY, PlaybackAction.choose(false, false, false, false, false))
+    }
     @Test fun fatalErrorOverridesStalePlayIntentWhileBufferingCanStillPause() {
         assertEquals(PlaybackAction.RECONNECT, PlaybackAction.choose(true, true, true, false, false))
         assertEquals(PlaybackAction.RETRY, PlaybackAction.choose(true, false, true, false, true))

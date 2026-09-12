@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.BitmapFactory
+import android.graphics.Bitmap
 import android.os.Build
 import android.os.Bundle
 import android.text.TextUtils
@@ -14,6 +15,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.OnBackPressedCallback
+import androidx.activity.viewModels
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -57,24 +60,34 @@ class MainActivity : CruiseActivity() {
     private var showingQueue = false
     private lateinit var adapter: TrackAdapter
     private lateinit var title: TextView
-    private lateinit var artist: TextView
     private lateinit var format: TextView
     private lateinit var banner: TextView
     private lateinit var elapsed: TextView
     private lateinit var duration: TextView
-    private lateinit var cover: CoverView
+    private var details: TrackDetailsView? = null
+    private var detailsExpanded = false
+    private var listPositionBeforeDetails: Parcelable? = null
+    private val detailsBack = object : OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() { setDetailsExpanded(false) }
+    }
+    private var artworkBitmap: Bitmap? = null
+    private var showingLyrics = false
+    private val lyricTrack = MutableStateFlow<Track?>(null)
+    private var lyricsState = LyricsState()
+    private val lyricsCache: LyricsCache by viewModels()
+    private var activeLyricsKey: String? = null
+    private var pendingOffline: String? = null
     private lateinit var seek: SeekBar
     private lateinit var play: TouchButton
     private lateinit var previous: TouchButton
     private lateinit var next: TouchButton
     private lateinit var recycler: RecyclerView
     private var pendingListPosition: Parcelable? = null
-    private lateinit var offline: TouchButton
     private lateinit var queueTab: TouchButton
     private lateinit var libraryTab: TouchButton
     private lateinit var listTitle: TextView
     private lateinit var empty: TextView
-    private var seeking = false
+    private var seekPreviewMs: Long? = null
     private var lastMessage: String? = null
     private var renderedTrack: String? = null
     private var renderedArtworkHash: Int? = null
@@ -121,6 +134,10 @@ class MainActivity : CruiseActivity() {
         Design.applySystemBars(window)
         selectedSource = savedInstanceState?.getString("source")
         showingQueue = savedInstanceState?.getBoolean("queue") ?: false
+        showingLyrics = app.preferences.getBoolean("showLyrics", false)
+        detailsExpanded = savedInstanceState?.getBoolean("detailsOpen") ?: false
+        listPositionBeforeDetails = savedInstanceState?.getParcelable("detailsListPosition")
+        onBackPressedDispatcher.addCallback(this, detailsBack)
         buildScreen()
         if (savedInstanceState?.getBoolean("settingsOpen") == true) window.decorView.post {
             showSettings(savedInstanceState.getInt("settingsScroll"))
@@ -155,9 +172,16 @@ class MainActivity : CruiseActivity() {
                     }
                 }
                 launch {
-                    cacheStatusFlow(cacheTrack, { app.media.status(it) }).collect { status ->
+                    cacheStatusFlow(cacheTrack, { app.media.storageStatus(it) }).collect { status ->
                         cacheStatus = status
+                        if(status.key == pendingOffline && !status.offline.canDownload)pendingOffline=null
                         if (currentTrack()?.cacheKey == status.key) renderPlayer()
+                    }
+                }
+                launch {
+                    lyricsStateFlow(lyricTrack, lyricsCache, lyricsCache.refreshes, app.lyrics::load).collect { state ->
+                        lyricsState=state
+                        renderDetails()
                     }
                 }
                 launch {
@@ -175,6 +199,7 @@ class MainActivity : CruiseActivity() {
         }
     }
     private fun buildScreen() {
+        detailsBack.isEnabled=detailsExpanded
         val config = resources.configuration
         val spec = PlayerLayoutSpec.forWindow(config.screenWidthDp, config.screenHeightDp, config.fontScale)
         val compact = spec.compact
@@ -216,23 +241,25 @@ class MainActivity : CruiseActivity() {
         val now=LinearLayout(this).apply { id=R.id.player_now;orientation=LinearLayout.VERTICAL;setPadding(dp(if(compact)12 else 20),dp(if(compact)8 else 20),dp(if(compact)12 else 20),dp(if(compact)8 else 16));background=Design.surface(Design.panel,dp(24).toFloat()) }
         if(!compact)now.addView(banner,LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=dp(12)})
         val info=LinearLayout(this).apply{gravity=Gravity.CENTER_VERTICAL}
-        cover=CoverView(this).apply{visibility=if(spec.showCover)View.VISIBLE else View.GONE}
-        info.addView(cover,LinearLayout.LayoutParams(dp(if(compact)56 else if(spec.landscape)160 else 80),dp(if(compact)56 else if(spec.landscape)160 else 80)))
-        val titles=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(if(spec.showCover)dp(if(compact)8 else 16)else 0,0,0,0)}
+        val titles=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
         title=Design.label(this,"让旅途有音乐",if(compact)22f else 28f,bold=true).apply{id=R.id.player_title;maxLines=if(compact && spec.landscape)1 else 2;ellipsize=TextUtils.TruncateAt.END;letterSpacing=-.015f}
-        artist=Design.label(this,"从音乐目录开始",20f,Design.secondary).apply{maxLines=1;ellipsize=TextUtils.TruncateAt.END}
         format=Design.label(this,"",if(compact)15f else 18f,Design.accent).apply{maxLines=1;ellipsize=TextUtils.TruncateAt.END}
         titles.addView(title)
-        if(!compact)titles.addView(artist,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(8)})
         if(!compact || !spec.landscape || config.fontScale<=1.3f)titles.addView(format,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(if(compact)4 else 8)})
-        info.addView(titles,LinearLayout.LayoutParams(0,-2,1f));now.addView(info)
+        info.addView(titles,LinearLayout.LayoutParams(0,-2,1f))
+        if(!spec.inlineDetails || detailsExpanded)info.addView(TouchButton(this,if(detailsExpanded)"返回" else "详情").apply {
+            id=R.id.player_details_navigation;textSize=18f;minHeight=dp(48);setPadding(dp(4),0,dp(4),0)
+            contentDescription=if(detailsExpanded)"返回歌曲列表" else "歌曲详情、封面与歌词"
+            setOnClickListener { setDetailsExpanded(!detailsExpanded) }
+        },LinearLayout.LayoutParams(dp(80),dp(48)).apply { marginStart=dp(8) })
+        now.addView(info)
         seek=SeekBar(this).apply{
             id=R.id.player_seek;max=10000;minimumHeight=dp(if(compact)48 else 64);contentDescription="播放进度"
             progressTintList=ColorStateList.valueOf(Design.accent);thumbTintList=ColorStateList.valueOf(Design.accent);setPadding(dp(6),0,dp(6),0)
             setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener{
-                override fun onStartTrackingTouch(seekBar:SeekBar){seeking=true}
-                override fun onStopTrackingTouch(seekBar:SeekBar){val total=knownDuration();if(total>0)controller?.seekTo(total*seekBar.progress/10000);seeking=false}
-                override fun onProgressChanged(seekBar:SeekBar,progress:Int,fromUser:Boolean){if(fromUser)elapsed.text=time(knownDuration()*progress/10000)}
+                override fun onStartTrackingTouch(seekBar:SeekBar){previewSeek(seekBar.progress)}
+                override fun onStopTrackingTouch(seekBar:SeekBar){finishSeek(seekBar.progress)}
+                override fun onProgressChanged(seekBar:SeekBar,progress:Int,fromUser:Boolean){if(fromUser)previewSeek(progress)}
             })
         }
         now.addView(seek,LinearLayout.LayoutParams(-1,dp(if(compact)48 else 64)))
@@ -240,8 +267,9 @@ class MainActivity : CruiseActivity() {
         elapsed=Design.label(this,"0:00",if(compact)16f else 18f,Design.secondary)
         duration=Design.label(this,"—",if(compact)16f else 18f,Design.secondary).apply{gravity=Gravity.END}
         times.addView(elapsed,LinearLayout.LayoutParams(0,-2,1f));times.addView(duration,LinearLayout.LayoutParams(0,-2,1f));now.addView(times)
-        offline=TouchButton(this,"保留离线").apply{setOnClickListener{keepCurrentOffline()}}
-        if(!compact && config.screenHeightDp>=700)now.addView(offline,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(12)})
+        details = if(spec.inlineDetails && !detailsExpanded) TrackDetailsView(this,::toggleLyrics,::keepCurrentOffline).also {
+            now.addView(it,LinearLayout.LayoutParams(-1,if(spec.landscape)0 else dp(240),if(spec.landscape)1f else 0f).apply { topMargin=dp(8) })
+        } else null
         val playbackColumn = if(spec.landscape) LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
             addView(now,LinearLayout.LayoutParams(-1,0,1f))
@@ -254,12 +282,12 @@ class MainActivity : CruiseActivity() {
         val tabHeight=if(compact)56 else 64
         queueTab=TouchButton(this,"队列").apply{minHeight=dp(tabHeight);textSize=20f;setPadding(dp(8),0,dp(8),0);maxLines=1;setOnClickListener{showingQueue=true;renderList()}}
         libraryTab=TouchButton(this,"曲库").apply{minHeight=dp(tabHeight);textSize=20f;setPadding(dp(8),0,dp(8),0);maxLines=1;setOnClickListener{showingQueue=false;renderList()}}
-        tabs.addView(queueTab,LinearLayout.LayoutParams(0,dp(tabHeight),1f));tabs.addView(libraryTab,LinearLayout.LayoutParams(0,dp(tabHeight),1f).apply{marginStart=dp(8)});lists.addView(tabs)
+        tabs.addView(queueTab,LinearLayout.LayoutParams(0,dp(tabHeight),1f));tabs.addView(libraryTab,LinearLayout.LayoutParams(0,dp(tabHeight),1f).apply{marginStart=dp(8)});if(!detailsExpanded)lists.addView(tabs)
         tabs.addView(TouchButton(this,"排序").apply {
             id=R.id.player_sort;minHeight=dp(tabHeight);textSize=18f;setPadding(dp(4),0,dp(4),0);maxLines=1
             setOnClickListener { showTrackSort() }
         },LinearLayout.LayoutParams(dp(72),dp(tabHeight)).apply { marginStart=dp(8) })
-        listTitle=Design.label(this,"还没有音乐",if(compact)16f else 19f,Design.secondary).apply{maxLines=1;ellipsize=TextUtils.TruncateAt.END;setPadding(dp(4),dp(if(compact)6 else 12),0,dp(if(compact)4 else 8))};lists.addView(listTitle)
+        listTitle=Design.label(this,"还没有音乐",if(compact)16f else 19f,Design.secondary).apply{maxLines=1;ellipsize=TextUtils.TruncateAt.END;setPadding(dp(4),dp(if(compact)6 else 12),0,dp(if(compact)4 else 8))};if(!detailsExpanded)lists.addView(listTitle)
         val frame=FrameLayout(this)
         adapter=TrackAdapter(compact){track ->
             if(showingQueue){val c=controller?:return@TrackAdapter;val index=(0 until c.mediaItemCount).firstOrNull{c.getMediaItemAt(it).mediaId==track.id};if(index!=null){c.seekTo(index,0);c.prepare();c.play()}}
@@ -269,7 +297,11 @@ class MainActivity : CruiseActivity() {
         recycler=RecyclerView(this).apply{id=R.id.player_list;layoutManager=LinearLayoutManager(this@MainActivity);adapter=this@MainActivity.adapter;itemAnimator=null;clipToPadding=true}
         frame.addView(recycler,FrameLayout.LayoutParams(-1,-1))
         empty=Design.label(this,"添加一个音乐目录\n喜欢的音乐，就在路上",if(compact)18f else 22f,Design.secondary).apply{gravity=Gravity.CENTER;setLineSpacing(dp(6).toFloat(),1f);setOnClickListener{showSources()};isFocusable=true;contentDescription="尚无音乐，点击添加来源"}
-        frame.addView(empty,FrameLayout.LayoutParams(-1,-1));lists.addView(frame,LinearLayout.LayoutParams(-1,0,1f))
+        frame.addView(empty,FrameLayout.LayoutParams(-1,-1))
+        if(detailsExpanded) {
+            lists.background=Design.surface(Design.panel,dp(24).toFloat());lists.setPadding(dp(12),dp(12),dp(12),dp(12))
+            details=TrackDetailsView(this,::toggleLyrics,::keepCurrentOffline).also { lists.addView(it,LinearLayout.LayoutParams(-1,0,1f)) }
+        } else lists.addView(frame,LinearLayout.LayoutParams(-1,0,1f))
         body.addView(lists,if(spec.landscape)LinearLayout.LayoutParams(0,-1,1.15f)else LinearLayout.LayoutParams(-1,0,1f))
         root.addView(body,LinearLayout.LayoutParams(-1,0,1f).apply{topMargin=dp(8)})
 
@@ -278,7 +310,7 @@ class MainActivity : CruiseActivity() {
         fun addFooter(button:TouchButton,weight:Float){button.minHeight=dp(76);button.setPadding(dp(8),0,dp(8),0);row.addView(button,LinearLayout.LayoutParams(0,dp(76),weight).apply{if(row.childCount>0)marginStart=dp(8)})}
         previous=TouchButton(this,"上一首").apply{id=R.id.player_previous;textSize=if(compact)18f else 22f;setOnClickListener{controller?.let{if(it.hasPreviousMediaItem())it.seekToPreviousMediaItem()else it.seekTo(0)}}}
         next=TouchButton(this,"下一首").apply{id=R.id.player_next;textSize=if(compact)18f else 22f;setOnClickListener{controller?.seekToNextMediaItem()}}
-        play=TouchButton(this,if(library.tracks.isEmpty())"添加" else "播放",true).apply{id=R.id.player_play;textSize=24f;setOnClickListener{
+        play=TouchButton(this,if(library.tracks.isEmpty())PlaybackAction.ADD.label else PlaybackAction.PLAY.label,true).apply{id=R.id.player_play;setOnClickListener{
             val c=controller
             if(c==null){if(library.tracks.isEmpty())showSources();return@setOnClickListener}
             if(c.playerError != null) {
@@ -290,14 +322,24 @@ class MainActivity : CruiseActivity() {
             else if(library.tracks.isEmpty())showSources()
             else libraryTracks().firstOrNull()?.let{command(PlaybackService.PLAY_TRACK,Bundle().apply{putString("trackId",it.id);selectedSource?.let{source->putString("sourceId",source)}});askNotificationPermission()}
         }}
+        updatePlaybackAction(if(library.tracks.isEmpty())PlaybackAction.ADD else PlaybackAction.PLAY)
         addFooter(previous,1f);addFooter(play,1.3f);addFooter(next,1f)
         footer.addView(row,FrameLayout.LayoutParams(-1,-2,Gravity.CENTER))
         if(spec.landscape)playbackColumn!!.addView(footer,LinearLayout.LayoutParams(-1,-2))
         else root.addView(footer,LinearLayout.LayoutParams(-1,-2))
         setContentView(root)
+        ViewCompat.requestApplyInsets(root)
+    }
+    private fun updatePlaybackAction(action:PlaybackAction) {
+        play.updateText(action.label)
+        play.contentDescription=action.description
+        val config=resources.configuration
+        val compact=PlayerLayoutSpec.forWindow(config.screenWidthDp,config.screenHeightDp,config.fontScale).compact
+        // The four-character empty-state label wraps on narrow player panels.
+        play.textSize=if(action==PlaybackAction.ADD && compact) { if(config.fontScale>1.3f)16f else 18f } else 24f
     }
     private fun renderList() {
-        if (!::adapter.isInitialized) return
+        if (!::adapter.isInitialized || detailsExpanded) return
         queueTab.selectedState(showingQueue); libraryTab.selectedState(!showingQueue)
         val c = controller
         val tracks = if (showingQueue && c != null) (0 until c.mediaItemCount).mapNotNull { index ->
@@ -353,12 +395,16 @@ class MainActivity : CruiseActivity() {
         val id = item?.mediaId
         val track = currentTrack()
         title.updateText(item?.mediaMetadata?.title ?: "让旅途有音乐")
-        artist.updateText(item?.mediaMetadata?.artist?.takeIf { it.isNotBlank() } ?: "连接夸克网盘，选择音乐目录")
         cacheTrack.value = track
+        activeLyricsKey=track?.lyricsKey
+        lyricTrack.value = if(showingLyrics && details != null)track else null
         val status = if (track == null) "" else if (cacheStatus.key == track.cacheKey) cacheStatus.text else "正在检查缓存"
         format.updateText(if (track == null) "" else "${track.relativePath.substringAfterLast('.', "音频").uppercase()} · $status")
         if (renderedTrack != id) {
-            renderedTrack = id; cover.seed = id?.hashCode() ?: 0; cover.artwork(null); renderedArtworkHash = null; renderedArtworkBytes = null
+            seekPreviewMs=null
+            artworkJob?.cancel()
+            renderedTrack = id; artworkBitmap=null;renderedArtworkHash = null; renderedArtworkBytes = null
+            details?.showArtwork(id,null)
         }
         c.mediaMetadata.artworkData?.takeIf { it.size < 12 * 1024 * 1024 && it !== renderedArtworkBytes }?.let { bytes ->
             renderedArtworkBytes = bytes
@@ -371,15 +417,17 @@ class MainActivity : CruiseActivity() {
                         val options = BitmapFactory.Options().apply { inSampleSize = (maxOf(bounds.outWidth, bounds.outHeight) / 512).coerceAtLeast(1) }
                         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
                     }
-                    if (renderedTrack == id) cover.artwork(bitmap)
+                    if (renderedTrack == id) {
+                        artworkBitmap=bitmap
+                        details?.showArtwork(id,bitmap)
+                    }
                 }
             }
         }
         renderProgress()
         val playAction = PlaybackAction.choose(c.playerError != null, c.sessionExtras.getBoolean("needsLogin"), c.playWhenReady,
             c.mediaItemCount == 0 && library.tracks.isEmpty(), c.currentPosition > 0)
-        play.updateText(playAction.label)
-        play.contentDescription = playAction.description
+        updatePlaybackAction(playAction)
         previous.isEnabled = c.mediaItemCount > 0
         next.isEnabled = c.hasNextMediaItem()
         modeSetting?.updateText("播放顺序：${PlaybackModes.label(c.repeatMode)}")
@@ -391,9 +439,45 @@ class MainActivity : CruiseActivity() {
             else -> "继续你的旅程"
         })
         banner.contentDescription = "播放状态：${banner.text}，点按查看完整详情"
-        offline.isEnabled = track != null && track.localUri.isBlank()
-        offline.updateText(if (status == "可离线播放") "已保留离线" else "保留离线")
+        renderDetails()
         adapter.updatePlayback(id, playbackLabel(c))
+    }
+    private fun renderDetails() {
+        val c=controller
+        val track=currentTrack()
+        val storage=if(track?.cacheKey == cacheStatus.key)cacheStatus.offline else OfflineState.UNAVAILABLE
+        val offline=if(track != null && pendingOffline == track.cacheKey)OfflineState.DOWNLOADING else storage
+        val state=if(track==null)LyricsState() else if(lyricsState.key == activeLyricsKey)lyricsState
+            else lyricsCache.get(activeLyricsKey) ?: LyricsState(activeLyricsKey,message="正在读取歌词…")
+        details?.let {
+            it.showArtwork(track?.id,artworkBitmap)
+            it.update(c?.mediaMetadata?.artist?.toString(),c?.mediaMetadata?.albumTitle?.toString(),showingLyrics,state,
+                displayedPosition(),track != null,offline,cacheStatus.text)
+        }
+    }
+    private fun toggleLyrics() {
+        showingLyrics=!showingLyrics
+        app.preferences.edit().putBoolean("showLyrics",showingLyrics).apply()
+        renderPlayer()
+    }
+    private fun showTrackDetails() = setDetailsExpanded(true)
+    private fun setDetailsExpanded(expanded: Boolean) {
+        if(detailsExpanded==expanded)return
+        if(expanded)listPositionBeforeDetails=recycler.layoutManager?.onSaveInstanceState()
+        else pendingListPosition=listPositionBeforeDetails
+        detailsExpanded=expanded;seekPreviewMs=null
+        buildScreen();renderList();renderPlayer()
+    }
+    private fun displayedPosition(): Long = seekPreviewMs ?: controller?.currentPosition ?: 0
+    private fun previewSeek(progress: Int) {
+        seekPreviewMs=knownDuration()*progress/10000
+        renderProgress()
+    }
+    private fun finishSeek(progress: Int) {
+        val total=knownDuration()
+        seekPreviewMs=null
+        if(total>0)controller?.seekTo(total*progress/10000)
+        renderPlayer()
     }
     private fun renderProgress() {
         if (!::seek.isInitialized) return
@@ -402,11 +486,19 @@ class MainActivity : CruiseActivity() {
         seek.isEnabled = total > 0
         seek.alpha = if (total > 0) 1f else .35f
         seek.contentDescription = if(total > 0) "播放进度" else "播放进度，等待加载时长，已恢复至 ${time(c.currentPosition)}"
-        if (!seeking) {
+        if (seekPreviewMs == null) {
             seek.progress = if(total > 0) (c.currentPosition * 10000 / total).toInt().coerceIn(0,10000) else 0
-            elapsed.updateText(time(c.currentPosition))
         }
+        elapsed.updateText(time(displayedPosition()))
         duration.updateText(if(total > 0) time(total) else "—")
+        if(showingLyrics && lyricsState.key == activeLyricsKey) {
+            renderLyricsAt(displayedPosition())
+        }
+    }
+    private fun renderLyricsAt(position:Long) {
+        if(showingLyrics && lyricsState.key == activeLyricsKey) {
+            details?.updateLyrics(lyricsState,position)
+        }
     }
     private fun showPlaybackStatus() {
         val (dialog, content) = panel("播放状态")
@@ -435,10 +527,17 @@ class MainActivity : CruiseActivity() {
     private fun TextView.updateText(value: CharSequence) { if (!TextUtils.equals(text, value)) text = value }
     private fun keepCurrentOffline() {
         val track = currentTrack() ?: return
-        try { app.media.keepOffline(track); askNotificationPermission(); toast("已加入离线下载") }
-        catch (e: Exception) { toast(readableError(e)) }
+        if(pendingOffline==track.cacheKey)return
+        try {
+            app.media.keepOffline(track);pendingOffline=track.cacheKey;renderDetails();askNotificationPermission();toast("已加入离线下载")
+            lifecycleScope.launch {
+                delay(5000)
+                if(pendingOffline==track.cacheKey) { pendingOffline=null;renderDetails() }
+            }
+        } catch (e: Exception) { pendingOffline=null;renderDetails();toast(readableError(e)) }
     }
     private fun showSources() {
+        if(detailsExpanded)setDetailsExpanded(false)
         val (dialog, content) = panel("音乐来源")
         if (library.sources.isNotEmpty()) {
             section(content, "我的音乐目录")
@@ -470,7 +569,7 @@ class MainActivity : CruiseActivity() {
         val (dialog, content) = panel("目录管理")
         val method = when(source.kind) { SourceKind.LOCAL -> "本地目录"; SourceKind.QUARK -> "网页登录"; SourceKind.QUARK_OPEN -> "Token 授权" }
         paragraph(content,"${source.title}\n$method")
-        action(content,"刷新音乐目录") { dialog.dismiss();app.scope.launch { app.library.scan(source) } }
+        action(content,"刷新音乐目录") { dialog.dismiss();app.scope.launch { app.library.scan(source);lyricsCache.invalidate() } }
         action(content,"移除音乐目录",destructive=true) {
             dialog.dismiss()
             confirmSourceRemoval(source)
@@ -721,6 +820,7 @@ class MainActivity : CruiseActivity() {
     }
     private fun populateSettings(dialog: AlertDialog, content: LinearLayout) {
         section(content,"播放")
+        action(content,"封面与歌词") { dialog.dismiss();showTrackDetails() }
         toggle(content, "打开应用时继续播放", "resumeOnOpen", false)
         paragraph(content, "熄屏时自动暂停并保存进度，亮屏后点击继续播放。")
         action(content, "${if (controller?.sessionExtras?.getBoolean("shuffled") == true) "关闭" else "开启"}随机播放") { command(PlaybackService.SHUFFLE); dialog.dismiss() }
@@ -776,7 +876,7 @@ class MainActivity : CruiseActivity() {
             Design.configure(app.preferences.getBoolean("dayMode",false),app.preferences.getBoolean("highContrast",false),app.preferences.getBoolean("reduceTransparency",false))
             if(syncNightMode)androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(if(Design.light)androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO else androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES)
             Design.applySystemBars(window)
-            artworkJob?.cancel();renderedTrack=null;renderedArtworkHash=null;renderedArtworkBytes=null
+            artworkJob?.cancel();artworkBitmap=null;renderedTrack=null;renderedArtworkHash=null;renderedArtworkBytes=null
             buildScreen();renderList();renderPlayer()
             currentSettings?.let { dialog -> panels[dialog]?.let { views ->
                 views.heading.setTextColor(Design.text)
@@ -849,6 +949,8 @@ class MainActivity : CruiseActivity() {
     private fun toast(text: String) { Toast.makeText(applicationContext, text, Toast.LENGTH_LONG).show() }
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString("source",selectedSource);outState.putBoolean("queue",showingQueue)
+        outState.putBoolean("detailsOpen",detailsExpanded)
+        outState.putParcelable("detailsListPosition",listPositionBeforeDetails)
         settingsDialog?.takeIf { it.isShowing }?.let { outState.putBoolean("settingsOpen",true);outState.putInt("settingsScroll",panels[it]?.scroll?.scrollY ?: 0) }
         super.onSaveInstanceState(outState)
     }

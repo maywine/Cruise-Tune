@@ -185,3 +185,37 @@ adb shell am instrument -w -r -e class com.cruisetune.player.LibraryActionsDevic
 独立验证包中通过系统目录选择器添加合成音乐目录，包含一个子目录，共读出 3 首；重复添加仍为 3 首，没有闪退。通过界面移除后原始测试音频仍在。本轮未覆盖真实网盘账号联调。
 
 按 apple-design 对本次交互做实屏 review：修正曲库与队列的选中态混用，以及空队列开始播放时忽略排序的问题；排序面板改用单选列表，普通横屏四个选项完整可见，360×640 dp、1.6 倍字体下文字可换行并可滚动。最终界面改动后复验 13 项界面测试、lintDebug 和设备回归，均通过。未进行 TalkBack 语音与实车音质验收。
+
+## 封面、离线与歌词回归
+
+主机测试覆盖 LRC 时间戳、多时间标记、正负偏移、重复时间点、间奏、编码与大小限制，以及同目录匹配、切歌取消和界面状态。歌词使用合成文字；网盘目录与下载请求通过模拟提供方验证，不使用真实账号。
+
+设备回归使用含歌手、专辑和封面的合成 FLAC。先在本机安装 FFmpeg，并在 `android-app/` 下生成测试资源：
+
+```sh
+mkdir -p app/build/generated/player-fixtures
+ffmpeg -f lavfi -i color=c=0xDDBB84:s=256x256 -frames:v 1 \
+  app/build/generated/player-fixtures/cover.png
+ffmpeg -f lavfi -i anullsrc=r=8000:cl=mono \
+  -i app/build/generated/player-fixtures/cover.png -map 0:a -map 1:v \
+  -t 60 -c:a flac -c:v png -disposition:v attached_pic \
+  -metadata title='Demo Track' -metadata artist='Demo Artist' -metadata album='Demo Album' \
+  app/build/generated/player-fixtures/details-fixture.flac
+./gradlew -PdeviceTestBuildType=authCheck :app:assembleAuthCheck :app:assembleAuthCheckAndroidTest
+adb install -r app/build/outputs/apk/authCheck/app-authCheck.apk
+adb install -r app/build/outputs/apk/androidTest/authCheck/app-authCheck-androidTest.apk
+adb shell am instrument -w -r -e class com.cruisetune.player.PlayerDetailsDeviceTest \
+  com.cruisetune.player.authcheck.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+资源只进入独立测试 APK，不进入源码或正式应用包。测试要求独立验证包的曲库和队列为空，读取真实 FLAC 标签，验证歌词前后跳转、暂停与封面切换，以及 Media3 离线缓存和完成状态。提供方使用带延迟的本机合成文件，因此测试期间临时取消下载的网络前提，结束后恢复；不能把这个结果当作真实网盘网络可用性的验证。成功标准为 `OK (1 test)`。测试截图只包含合成内容，保存在验证包的外部文件目录，不纳入版本控制。
+
+本轮验证：144 项主机测试通过；最终文字布局调整后，16 项相关界面测试及 lintDebug 复验通过。BlueStacks Android 7.1.1 上，原有排序／移除回归和上述详情回归分别报告 `OK (1 test)`。另通过系统目录选择器添加含空格文件名的合成 FLAC 与同名 LRC，确认歌词读取、暂停时调整进度及间奏显示；大字体竖屏可从详情面板切换封面／歌词，短横屏保留主要播放按钮和歌曲列表。测试后恢复原分辨率与字体大小。未覆盖真实网盘账号联调、FLAC 内嵌歌词、TalkBack 语音或实车音质。
+
+审查修复后：进度、歌词和详情使用统一的拖动预览时间；当前歌词缓存跨显示模式和 Activity 重建保留，刷新音乐目录时失效，失败结果不缓存。详情改为页面内展开，保留歌名、进度和主要播放按钮，并在返回时恢复列表位置。歌手与专辑文本行预留高度，缺失或迟到的信息不再改变封面图框尺寸。
+
+新增回归覆盖歌词往返只读取一次、缓存失效和失败重试、信息加载前后的图框一致、小屏展开与返回、列表位置恢复。设备回归会临时移除自己创建的歌词文件验证内存缓存，在拖动预览中强制刷新详情验证时间一致，并实际操作展开页的播放、暂停、上一首和下一首。
+
+修复复验：151 项主机测试通过，最终导航宽度与安全边距调整后，16 项界面测试和 lintDebug 再次通过。BlueStacks 的普通横屏、640×360 与 360×640 dp／1.6 倍字体下，详情回归分别通过；实屏核对展开页不遮挡播放操作，顶部安全边距及返回入口正常。测试结束恢复原分辨率和字体大小。
+
+v0.5.14 发布前验证：空曲库按钮改为“添加音乐”，补充显示完整性、来源入口和播放状态切换回归。153 项 Android 主机测试、15 项发布工具测试、8 项连接服务测试、release lint 及本地构建通过；该版本独立验证包在 BlueStacks 上的详情回归和目录／排序回归分别报告 `OK (1 test)`。合成音频仅存在于测试 APK，未进入 release APK；提交内容及文档通过隐私检查。

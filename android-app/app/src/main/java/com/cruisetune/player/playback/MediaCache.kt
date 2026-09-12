@@ -17,6 +17,8 @@ import com.cruisetune.player.CruiseApplication
 import com.cruisetune.player.R
 import com.cruisetune.player.core.Track
 import com.cruisetune.player.core.UserError
+import com.cruisetune.player.core.OfflineState
+import com.cruisetune.player.core.StorageStatus
 import com.cruisetune.player.data.JsonCodec
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.ensureActive
@@ -51,23 +53,28 @@ class MediaCache(private val app: CruiseApplication) {
     }
     val notificationHelper = DownloadNotificationHelper(app, "offline-downloads")
 
+    // The legacy artist field contains the source folder name. Do not override the audio's artist tag with it.
     fun mediaItem(track: Track): MediaItem = MediaItem.Builder().setMediaId(track.id)
         .setUri("cruisetune://track/${track.id}").setCustomCacheKey(track.cacheKey).setMimeType(track.mimeType)
-        .setMediaMetadata(MediaMetadata.Builder().setTitle(track.title).setArtist(track.artist)
+        .setMediaMetadata(MediaMetadata.Builder().setTitle(track.title).setSubtitle(track.artist)
             .setExtras(Bundle().apply { putString("track", JsonCodec.encode(track)) })
             .setIsPlayable(true).setIsBrowsable(false).setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC).build()).build()
 
-    fun status(track: Track): String {
-        if (track.localUri.isNotBlank()) return "本地音乐"
+    fun status(track: Track): String = storageStatus(track).text
+    fun storageStatus(track: Track): StorageStatus {
+        if (track.localUri.isNotBlank()) return StorageStatus("本地音乐", OfflineState.LOCAL)
         val item = downloadManager.downloadIndex.getDownload(track.cacheKey)
-        if (item?.state == Download.STATE_COMPLETED && isComplete(track, item.contentLength)) return "可离线播放"
-        if (isPrefetchComplete(track)) return "已缓存完整"
-        if (item?.state == Download.STATE_DOWNLOADING) return "正在保留离线 ${item.percentDownloaded.toInt().coerceAtLeast(0)}%"
-        if (item?.state == Download.STATE_QUEUED) return "等待下载"
-        if (item?.state == Download.STATE_STOPPED) return "下载已暂停"
-        if (stream.getCachedBytes(track.cacheKey, 0, C.LENGTH_UNSET.toLong()) > 0 || offline.getCachedBytes(track.cacheKey, 0, C.LENGTH_UNSET.toLong()) > 0) return "已缓存部分"
-        if (item?.state == Download.STATE_FAILED) return "下载未完成"
-        return "在线"
+        if (item?.state == Download.STATE_COMPLETED && isComplete(track, item.contentLength)) return StorageStatus("可离线播放", OfflineState.SAVED)
+        if (item?.state == Download.STATE_DOWNLOADING) return StorageStatus("正在保留离线" +
+            (if (item.percentDownloaded >= 0) " ${item.percentDownloaded.toInt()}%" else ""), OfflineState.DOWNLOADING)
+        if (item?.state == Download.STATE_QUEUED) return StorageStatus("等待下载", OfflineState.QUEUED)
+        if (item?.state == Download.STATE_RESTARTING) return StorageStatus("正在重新下载", OfflineState.DOWNLOADING)
+        if (item?.state == Download.STATE_REMOVING) return StorageStatus("正在移除离线下载", OfflineState.REMOVING)
+        if (item?.state == Download.STATE_STOPPED) return StorageStatus("下载已暂停", OfflineState.PAUSED)
+        if (item?.state == Download.STATE_FAILED) return StorageStatus("下载未完成", OfflineState.FAILED)
+        if (isPrefetchComplete(track)) return StorageStatus("已缓存完整", OfflineState.AVAILABLE)
+        if (stream.getCachedBytes(track.cacheKey, 0, C.LENGTH_UNSET.toLong()) > 0 || offline.getCachedBytes(track.cacheKey, 0, C.LENGTH_UNSET.toLong()) > 0) return StorageStatus("已缓存部分", OfflineState.AVAILABLE)
+        return StorageStatus("在线", OfflineState.AVAILABLE)
     }
     fun isComplete(track: Track, reportedLength: Long = -1): Boolean {
         val length = reportedLength.takeIf { it > 0 } ?: track.size.takeIf { it > 0 }

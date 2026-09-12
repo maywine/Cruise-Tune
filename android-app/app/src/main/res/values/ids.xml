@@ -2,6 +2,15 @@
     <item type="id" name="player_root" />
     <item type="id" name="player_seek" />
     <item type="id" name="player_title" />
+    <item type="id" name="player_details" />
+    <item type="id" name="player_details_navigation" />
+    <item type="id" name="player_artwork" />
+    <item type="id" name="player_album" />
+    <item type="id" name="player_artist" />
+    <item type="id" name="player_lyric_current" />
+    <item type="id" name="player_lyric_next" />
+    <item type="id" name="player_lyrics_toggle" />
+    <item type="id" name="player_offline" />
     <item type="id" name="player_now" />
     <item type="id" name="player_status" />
     <item type="id" name="player_times" />

@@ -1,6 +1,8 @@
 package com.cruisetune.player.ui
 
 import com.cruisetune.player.core.Track
+import com.cruisetune.player.core.StorageStatus
+import com.cruisetune.player.core.OfflineState
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import org.junit.Assert.*
@@ -13,7 +15,7 @@ class CacheStatusFlowTest {
     @Test fun cacheQueryRunsOffTheUiCollectorThread() = runBlocking {
         val collectorThread=Thread.currentThread();val queryThread=AtomicReference<Thread>()
         val track=Track("song","source","file","Song")
-        val result=cacheStatusFlow(flowOf(track),{queryThread.set(Thread.currentThread());"已缓存完整"}).first()
+        val result=cacheStatusFlow(flowOf(track),{queryThread.set(Thread.currentThread());StorageStatus("已缓存完整",OfflineState.AVAILABLE)}).first()
         assertNotSame(collectorThread,queryThread.get())
         assertEquals(track.cacheKey,result.key);assertEquals("已缓存完整",result.text)
     }
@@ -23,7 +25,7 @@ class CacheStatusFlowTest {
         val result=async {
             cacheStatusFlow(input,{track ->
                 if(track.id=="old"){started.countDown();check(release.await(3,TimeUnit.SECONDS))}
-                track.id
+                StorageStatus(track.id,OfflineState.AVAILABLE)
             }).first()
         }
         try {

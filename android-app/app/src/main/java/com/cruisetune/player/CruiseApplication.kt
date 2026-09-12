@@ -25,6 +25,7 @@ class CruiseApplication : Application() {
     val mediaDatabase by lazy { androidx.media3.database.StandaloneDatabaseProvider(this) }
     val offlineIndex by lazy { androidx.media3.exoplayer.offline.DefaultDownloadIndex(mediaDatabase) }
     val library by lazy { LibraryRepository(this, database, vault, http, openConnections, ::offlineTrackIds) }
+    val lyrics by lazy { LyricsRepository(this, library, http) }
     private fun offlineTrackIds(): Set<String> = offlineIndex.getDownloads().use { cursor ->
         buildSet {
             while (cursor.moveToNext()) {

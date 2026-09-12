@@ -61,6 +61,7 @@ android {
         }
     }
     testBuildType = providers.gradleProperty("deviceTestBuildType").getOrElse("debug")
+    sourceSets.getByName("androidTest").assets.srcDir(layout.buildDirectory.dir("generated/player-fixtures"))
     testOptions { unitTests.isIncludeAndroidResources = true }
     lint { abortOnError = true }
 }
