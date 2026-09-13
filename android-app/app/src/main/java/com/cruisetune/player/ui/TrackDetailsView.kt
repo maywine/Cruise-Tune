@@ -8,6 +8,7 @@ import android.view.View
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.ScrollView
 import androidx.core.view.animation.PathInterpolatorCompat
 import com.cruisetune.player.R
 import com.cruisetune.player.core.OfflineState
@@ -66,6 +67,19 @@ internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keep
     private val next = Design.label(context, "", 20f, Design.secondary).apply {
         id=R.id.player_lyric_next;gravity=Gravity.CENTER;maxLines=2;ellipsize=TextUtils.TruncateAt.END
     }
+    private val plainText = Design.label(context, "", 20f).apply {
+        id=R.id.player_lyric_plain;setLineSpacing(context.dp(4).toFloat(),1f)
+    }
+    private val plainScroll = ScrollView(context).apply {
+        id=R.id.player_lyric_scroll;isFillViewport=true
+        addView(plainText,LayoutParams(-1,-2))
+    }
+    private val plainLyrics = LinearLayout(context).apply {
+        orientation=VERTICAL;visibility=GONE
+        addView(Design.label(context,"未同步歌词 · 可手动滚动",16f,Design.secondary),LayoutParams(-1,-2).apply { bottomMargin=context.dp(6) })
+        addView(plainScroll,LayoutParams(-1,0,1f))
+    }
+    private var plainKey: String? = null
     private val metadata = LinearLayout(context).apply { orientation=VERTICAL }
     private val artistLabel = Design.label(context, "", 20f).apply {
         id=R.id.player_artist;gravity=Gravity.CENTER;minLines=1;maxLines=1;ellipsize=TextUtils.TruncateAt.END;visibility=INVISIBLE
@@ -90,6 +104,7 @@ internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keep
         lyrics.addView(current,LayoutParams(-1,-2))
         lyrics.addView(next,LayoutParams(-1,-2).apply { topMargin=context.dp(10) })
         content.addView(lyrics,FrameLayout.LayoutParams(-1,-1))
+        content.addView(plainLyrics,FrameLayout.LayoutParams(-1,-1))
         addView(content,LayoutParams(-1,0,1f))
         metadata.addView(artistLabel,LayoutParams(-1,-2))
         metadata.addView(albumLabel,LayoutParams(-1,-2).apply { topMargin=context.dp(4) })
@@ -109,9 +124,11 @@ internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keep
         artistLabel.visibility=if(artist.isNullOrBlank())INVISIBLE else VISIBLE
         albumLabel.visibility=if(album.isNullOrBlank())INVISIBLE else VISIBLE
         artwork.visibility=if(showingLyrics)GONE else VISIBLE
-        lyrics.visibility=if(showingLyrics)VISIBLE else GONE
+        val untimed = !state.lyrics?.plainText.isNullOrBlank()
+        lyrics.visibility=if(showingLyrics && !untimed)VISIBLE else GONE
+        plainLyrics.visibility=if(showingLyrics && untimed)VISIBLE else GONE
         mode.setTextIfChanged(if(showingLyrics) "封面" else "歌词")
-        mode.contentDescription=if(showingLyrics) "切换到歌曲封面" else "切换到双行歌词"
+        mode.contentDescription=if(showingLyrics) "切换到歌曲封面" else "切换到歌词"
         mode.isEnabled=hasTrack
         offline.setTextIfChanged(offlineState.label)
         offline.contentDescription="${offlineState.label}，$storageDescription"
@@ -120,6 +137,13 @@ internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keep
     }
 
     fun updateLyrics(state: LyricsState, positionMs: Long) {
+        if(plainLyrics.visibility==VISIBLE) {
+            val value=state.lyrics?.plainText.orEmpty()
+            if(plainKey!=state.key || !TextUtils.equals(plainText.text,value)) {
+                plainKey=state.key;plainText.text=value;plainScroll.scrollTo(0,0)
+            }
+            return
+        }
         if(lyrics.visibility!=VISIBLE)return
         val frame=state.lyrics?.at(positionMs)
         current.setTextIfChanged(frame?.current ?: state.message)

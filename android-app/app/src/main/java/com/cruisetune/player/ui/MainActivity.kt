@@ -72,7 +72,7 @@ class MainActivity : CruiseActivity() {
     }
     private var artworkBitmap: Bitmap? = null
     private var showingLyrics = false
-    private val lyricTrack = MutableStateFlow<Track?>(null)
+    private val lyricTrack = MutableStateFlow<LyricsRequest?>(null)
     private var lyricsState = LyricsState()
     private val lyricsCache: LyricsCache by viewModels()
     private var activeLyricsKey: String? = null
@@ -397,7 +397,12 @@ class MainActivity : CruiseActivity() {
         title.updateText(item?.mediaMetadata?.title ?: "让旅途有音乐")
         cacheTrack.value = track
         activeLyricsKey=track?.lyricsKey
-        lyricTrack.value = if(showingLyrics && details != null)track else null
+        lyricTrack.value = if(showingLyrics && details != null && track != null) LyricsRequest(track,
+            c.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }.flatMap { group ->
+                (0 until group.length).filter { group.isTrackSelected(it) }.flatMap {
+                    com.cruisetune.player.playback.EmbeddedLyrics.entries(group.getTrackFormat(it).metadata)
+                }
+            }) else null
         val status = if (track == null) "" else if (cacheStatus.key == track.cacheKey) cacheStatus.text else "正在检查缓存"
         format.updateText(if (track == null) "" else "${track.relativePath.substringAfterLast('.', "音频").uppercase()} · $status")
         if (renderedTrack != id) {

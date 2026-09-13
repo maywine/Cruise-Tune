@@ -3,7 +3,7 @@ package com.cruisetune.player.core
 data class LyricLine(val timeMs: Long, val text: String)
 data class LyricFrame(val current: String, val next: String)
 
-class LrcLyrics(val lines: List<LyricLine>) {
+class LrcLyrics(val lines: List<LyricLine>, val plainText: String? = null) {
     fun at(positionMs: Long): LyricFrame {
         var low = 0
         var high = lines.size

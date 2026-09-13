@@ -219,3 +219,37 @@ adb shell am instrument -w -r -e class com.cruisetune.player.PlayerDetailsDevice
 修复复验：151 项主机测试通过，最终导航宽度与安全边距调整后，16 项界面测试和 lintDebug 再次通过。BlueStacks 的普通横屏、640×360 与 360×640 dp／1.6 倍字体下，详情回归分别通过；实屏核对展开页不遮挡播放操作，顶部安全边距及返回入口正常。测试结束恢复原分辨率和字体大小。
 
 v0.5.14 发布前验证：空曲库按钮改为“添加音乐”，补充显示完整性、来源入口和播放状态切换回归。153 项 Android 主机测试、15 项发布工具测试、8 项连接服务测试、release lint 及本地构建通过；该版本独立验证包在 BlueStacks 上的详情回归和目录／排序回归分别报告 `OK (1 test)`。合成音频仅存在于测试 APK，未进入 release APK；提交内容及文档通过隐私检查。
+
+## 内嵌歌词回归
+
+主机测试覆盖 Vorbis 字段名、ID3 USLT／ULT 编码与内容描述符、M4A 歌词字段、同步／纯文本优先级、损坏或过大标签、迟到的内嵌标签取消同目录请求，以及纯文本滚动位置保持。仅解析歌词字段，不把普通注释、歌手信息或不支持的 SYLT 帧当作歌词。
+
+先按上一节生成 `details-fixture.flac`，再在 `android-app/` 下生成带合成歌词的音频（`-n` 拒绝覆盖已有文件）：
+
+```sh
+cruise_synced_lyrics='[00:01]内嵌第一句
+[00:04]内嵌第二句
+[00:08]内嵌第三句'
+cruise_plain_lyrics=$(awk 'BEGIN { for (i=1;i<=60;i++) printf "合成纯文本歌词第 %d 行\n", i }')
+ffmpeg -n -i app/build/generated/player-fixtures/details-fixture.flac -map 0 -c copy \
+  -metadata lyrics="$cruise_synced_lyrics" app/build/generated/player-fixtures/embedded-synced.flac
+ffmpeg -n -i app/build/generated/player-fixtures/details-fixture.flac -map 0 -c copy \
+  -metadata lyrics="$cruise_plain_lyrics" app/build/generated/player-fixtures/embedded-plain.flac
+ffmpeg -n -i app/build/generated/player-fixtures/details-fixture.flac -map 0:a -c:a libmp3lame -ar 22050 \
+  -metadata lyrics="$cruise_synced_lyrics" app/build/generated/player-fixtures/embedded.mp3
+ffmpeg -n -i app/build/generated/player-fixtures/details-fixture.flac -map 0:a -c:a aac -ar 44100 \
+  -metadata lyrics="$cruise_synced_lyrics" app/build/generated/player-fixtures/embedded.m4a
+ffmpeg -n -i app/build/generated/player-fixtures/details-fixture.flac -map 0:a -c:a libvorbis -ar 44100 \
+  -metadata lyrics="$cruise_synced_lyrics" app/build/generated/player-fixtures/embedded.ogg
+./gradlew -PdeviceTestBuildType=authCheck :app:assembleAuthCheck :app:assembleAuthCheckAndroidTest
+adb install -r app/build/outputs/apk/authCheck/app-authCheck.apk
+adb install -r app/build/outputs/apk/androidTest/authCheck/app-authCheck-androidTest.apk
+adb shell am instrument -w -r -e class com.cruisetune.player.EmbeddedLyricsDeviceTest \
+  com.cruisetune.player.authcheck.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+测试只允许运行在空曲库、空队列的独立验证包中。它另行构造标准 ID3v2.4 USLT 测试文件，避免仅覆盖 FFmpeg 的同名 TXXX 写法；为每种音频生成不同内容的同名 LRC，验证内嵌歌词优先。还验证纯文本滚动、暂停时前后跳转、切歌清除旧歌词和无内嵌歌词时回退，并通过模拟提供方及真实离线缓存验证断开提供方后的歌词显示。测试检查音频内容未被改写，结束后清理自身创建的曲库记录、下载和临时文件；成功标准为 `OK (1 test)`。不使用真实网盘账号，也不验证在线歌词网站。
+
+验证结果：166 项主机测试、lintDebug 和独立验证包构建通过。BlueStacks Android 7.1.1 的普通横屏、640×360 与 360×640 dp／1.6 倍字体下，内嵌歌词回归分别报告 `OK (1 test)`，并断言主要播放控件完整可见、纯文本视口至少容纳一行；原有封面／同目录歌词／离线回归也报告 `OK (1 test)`。应用 APK 未包含合成音频，测试结束恢复原分辨率与字体设置。未验证真实网盘账号、TalkBack 语音或实车使用。
+
+v0.5.15 发布前复验：166 项 Android 主机测试、15 项发布工具测试、8 项连接服务测试、release lint 和本地构建通过；该版本独立验证包的内嵌歌词及原有播放详情回归分别报告 `OK (1 test)`。本地 release 包版本为 0.5.15／24，非 debuggable，未包含合成音频；提交内容与文档通过隐私检查。

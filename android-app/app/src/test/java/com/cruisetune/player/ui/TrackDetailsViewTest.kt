@@ -21,6 +21,32 @@ import java.time.Duration
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[28],application=Application::class,manifest=Config.NONE)
 class TrackDetailsViewTest {
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    @Test fun plainLyricsAreScrollableAndNeverFollowPlaybackTime() {
+        RuntimeEnvironment.setQualifiers("mdpi");RuntimeEnvironment.setFontScale(1.6f)
+        val details=TrackDetailsView(RuntimeEnvironment.getApplication(),{}, {})
+        val text=(1..60).joinToString("\n") { "合成歌词第 $it 行" }
+        val state=LyricsState("song",LrcLyrics(emptyList(),text),"",true)
+        fun update(show:Boolean) {
+            details.update(null,null,show,state,0,true,OfflineState.LOCAL,"本地音乐")
+            details.measure(View.MeasureSpec.makeMeasureSpec(320,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(400,View.MeasureSpec.EXACTLY))
+            details.layout(0,0,320,400)
+        }
+        update(true)
+        val scroll=details.findViewById<android.widget.ScrollView>(R.id.player_lyric_scroll)
+        val body=details.findViewById<TextView>(R.id.player_lyric_plain)
+        assertEquals(text,body.text.toString())
+        assertTrue(scroll.canScrollVertically(1))
+        assertFalse(details.findViewById<View>(R.id.player_lyric_current).isShown)
+        scroll.scrollTo(0,120)
+        details.updateLyrics(state,45000)
+        assertEquals(120,scroll.scrollY)
+        update(false);update(true)
+        assertEquals(120,scroll.scrollY)
+        details.update(null,null,true,state.copy(key="next",lyrics=LrcLyrics(emptyList(),"Next song")),0,true,OfflineState.LOCAL,"")
+        assertEquals(0,scroll.scrollY)
+        assertEquals("Next song",body.text.toString())
+    }
     @Test fun coverLyricsAndOfflineActionsReflectOnlyTheCurrentState() {
         val app=RuntimeEnvironment.getApplication()
         var toggles=0;var downloads=0
