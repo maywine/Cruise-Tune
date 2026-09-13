@@ -184,6 +184,7 @@ class MainActivity : CruiseActivity() {
                         renderDetails()
                     }
                 }
+                launch { app.playbackMetadata.collect { renderPlayer() } }
                 launch {
                     val choreographer = Choreographer.getInstance()
                     while (isActive) {
@@ -394,15 +395,11 @@ class MainActivity : CruiseActivity() {
         val item = c.currentMediaItem
         val id = item?.mediaId
         val track = currentTrack()
+        val metadata = currentMetadata()
         title.updateText(item?.mediaMetadata?.title ?: "让旅途有音乐")
         cacheTrack.value = track
         activeLyricsKey=track?.lyricsKey
-        lyricTrack.value = if(showingLyrics && details != null && track != null) LyricsRequest(track,
-            c.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }.flatMap { group ->
-                (0 until group.length).filter { group.isTrackSelected(it) }.flatMap {
-                    com.cruisetune.player.playback.EmbeddedLyrics.entries(group.getTrackFormat(it).metadata)
-                }
-            }) else null
+        lyricTrack.value = if(showingLyrics && details != null && track != null) LyricsRequest(track,metadata?.lyrics) else null
         val status = if (track == null) "" else if (cacheStatus.key == track.cacheKey) cacheStatus.text else "正在检查缓存"
         format.updateText(if (track == null) "" else "${track.relativePath.substringAfterLast('.', "音频").uppercase()} · $status")
         if (renderedTrack != id) {
@@ -411,7 +408,13 @@ class MainActivity : CruiseActivity() {
             renderedTrack = id; artworkBitmap=null;renderedArtworkHash = null; renderedArtworkBytes = null
             details?.showArtwork(id,null)
         }
-        c.mediaMetadata.artworkData?.takeIf { it.size < 12 * 1024 * 1024 && it !== renderedArtworkBytes }?.let { bytes ->
+        val artwork = metadata?.mediaMetadata?.artworkData?.takeIf { it.size < 12 * 1024 * 1024 }
+        if(artwork==null && renderedArtworkBytes!=null) {
+            artworkJob?.cancel()
+            artworkBitmap=null;renderedArtworkHash=null;renderedArtworkBytes=null
+            details?.showArtwork(id,null)
+        }
+        artwork?.takeIf { it !== renderedArtworkBytes }?.let { bytes ->
             renderedArtworkBytes = bytes
             val hash = bytes.contentHashCode()
             if (renderedArtworkHash != hash) {
@@ -422,7 +425,7 @@ class MainActivity : CruiseActivity() {
                         val options = BitmapFactory.Options().apply { inSampleSize = (maxOf(bounds.outWidth, bounds.outHeight) / 512).coerceAtLeast(1) }
                         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
                     }
-                    if (renderedTrack == id) {
+                    if (renderedTrack == id && renderedArtworkBytes === bytes) {
                         artworkBitmap=bitmap
                         details?.showArtwork(id,bitmap)
                     }
@@ -449,6 +452,7 @@ class MainActivity : CruiseActivity() {
     }
     private fun renderDetails() {
         val c=controller
+        val metadata=app.playbackMetadata.value.forTrack(c?.currentMediaItem?.mediaId)?.mediaMetadata
         val track=currentTrack()
         val storage=if(track?.cacheKey == cacheStatus.key)cacheStatus.offline else OfflineState.UNAVAILABLE
         val offline=if(track != null && pendingOffline == track.cacheKey)OfflineState.DOWNLOADING else storage
@@ -456,10 +460,11 @@ class MainActivity : CruiseActivity() {
             else lyricsCache.get(activeLyricsKey) ?: LyricsState(activeLyricsKey,message="正在读取歌词…")
         details?.let {
             it.showArtwork(track?.id,artworkBitmap)
-            it.update(c?.mediaMetadata?.artist?.toString(),c?.mediaMetadata?.albumTitle?.toString(),showingLyrics,state,
+            it.update(metadata?.artist?.toString(),metadata?.albumTitle?.toString(),showingLyrics,state,
                 displayedPosition(),track != null,offline,cacheStatus.text)
         }
     }
+    private fun currentMetadata() = app.playbackMetadata.value.forTrack(controller?.currentMediaItem?.mediaId)
     private fun toggleLyrics() {
         showingLyrics=!showingLyrics
         app.preferences.edit().putBoolean("showLyrics",showingLyrics).apply()

@@ -253,3 +253,19 @@ adb shell am instrument -w -r -e class com.cruisetune.player.EmbeddedLyricsDevic
 验证结果：166 项主机测试、lintDebug 和独立验证包构建通过。BlueStacks Android 7.1.1 的普通横屏、640×360 与 360×640 dp／1.6 倍字体下，内嵌歌词回归分别报告 `OK (1 test)`，并断言主要播放控件完整可见、纯文本视口至少容纳一行；原有封面／同目录歌词／离线回归也报告 `OK (1 test)`。应用 APK 未包含合成音频，测试结束恢复原分辨率与字体设置。未验证真实网盘账号、TalkBack 语音或实车使用。
 
 v0.5.15 发布前复验：166 项 Android 主机测试、15 项发布工具测试、8 项连接服务测试、release lint 和本地构建通过；该版本独立验证包的内嵌歌词及原有播放详情回归分别报告 `OK (1 test)`。本地 release 包版本为 0.5.15／24，非 debuggable，未包含合成音频；提交内容与文档通过隐私检查。
+
+## 切歌元数据归属回归
+
+沿用上一节的合成音频资源。`TrackTransitionDeviceTest` 使用三首内容不同的测试歌曲：带封面和歌词的 FLAC、无封面及歌词的 MP3、带不同封面和歌词的 MP3。后两首在测试运行时生成，不改动任何用户音频；模拟提供方的延迟用于覆盖切歌过渡状态。
+
+```sh
+./gradlew -PdeviceTestBuildType=authCheck :app:assembleAuthCheck :app:assembleAuthCheckAndroidTest
+adb install -r app/build/outputs/apk/authCheck/app-authCheck.apk
+adb install -r app/build/outputs/apk/androidTest/authCheck/app-authCheck-androidTest.apk
+adb shell am instrument -w -r -e class com.cruisetune.player.TrackTransitionDeviceTest \
+  com.cruisetune.player.authcheck.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+仅在空曲库、空队列的独立验证包中运行。测试实际点击下一首、上一首和队列行，并覆盖快速往返与自然播完自动切歌；验证新歌曲不继承旧封面、旧歌手信息或旧歌词，也能显示自身不同的封面和歌词。测试不申请音频焦点，结束时恢复验证包的相关设置并清理自身数据，成功标准为 `OK (1 test)`。
+
+v0.5.16 发布前验证：171 项 Android 主机测试、15 项发布工具测试、8 项连接服务测试、release lint 和本地构建通过。BlueStacks Android 7.1.1 上，切歌元数据归属、内嵌歌词、原有播放详情及目录／排序四项设备回归分别报告 `OK (1 test)`；正式包曲库和音频未改动。release 包未包含合成音频，源码与文档通过隐私检查。

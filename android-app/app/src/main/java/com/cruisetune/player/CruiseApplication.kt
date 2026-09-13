@@ -26,6 +26,7 @@ class CruiseApplication : Application() {
     val offlineIndex by lazy { androidx.media3.exoplayer.offline.DefaultDownloadIndex(mediaDatabase) }
     val library by lazy { LibraryRepository(this, database, vault, http, openConnections, ::offlineTrackIds) }
     val lyrics by lazy { LyricsRepository(this, library, http) }
+    internal val playbackMetadata = kotlinx.coroutines.flow.MutableStateFlow(com.cruisetune.player.playback.PlaybackMetadata())
     private fun offlineTrackIds(): Set<String> = offlineIndex.getDownloads().use { cursor ->
         buildSet {
             while (cursor.moveToNext()) {

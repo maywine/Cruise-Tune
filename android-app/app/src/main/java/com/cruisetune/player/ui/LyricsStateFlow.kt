@@ -15,21 +15,24 @@ import kotlinx.coroutines.flow.*
 internal data class LyricsState(val key: String? = null, val lyrics: LrcLyrics? = null, val message: String = "选择一首歌曲", val embedded: Boolean = false)
 internal val Track.lyricsKey: String get() = stableHash(cacheKey,relativePath)
 @androidx.media3.common.util.UnstableApi
-internal data class LyricsRequest(val track: Track, val metadata: List<Metadata.Entry> = emptyList())
+internal data class LyricsRequest(val track: Track, val metadata: List<Metadata.Entry>? = emptyList())
 
 /** Keep one successful result across view changes and Activity recreation, never failures. */
 @androidx.media3.common.util.UnstableApi
 internal class LyricsCache : ViewModel() {
     private var cached: LyricsState? = null
-    private var metadata: List<Metadata.Entry> = emptyList()
+    private var metadata: List<Metadata.Entry>? = emptyList()
     private val refreshMutable = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val refreshes = refreshMutable.asSharedFlow()
     fun get(key: String?): LyricsState? = cached?.takeIf { key != null && it.key == key }
     fun get(request: LyricsRequest): LyricsState? = get(request.track.lyricsKey)?.takeIf {
-        request.metadata.isEmpty() || request.metadata == metadata
+        request.metadata == null || request.metadata == metadata
     }
-    fun remember(state: LyricsState, entries: List<Metadata.Entry> = emptyList()) {
+    fun remember(state: LyricsState, entries: List<Metadata.Entry>? = emptyList()) {
         if (state.lyrics != null) { cached = state; metadata = entries }
+    }
+    fun discardEmbedded(key: String) {
+        if(cached?.key==key && cached?.embedded==true) { cached=null;metadata=emptyList() }
     }
     fun invalidate() { cached = null; metadata = emptyList(); refreshMutable.tryEmit(Unit) }
 }
@@ -45,9 +48,10 @@ internal fun lyricsStateFlow(tracks: Flow<LyricsRequest?>, cache: LyricsCache = 
                 val track=request.track
                 val key=track.lyricsKey
                 cache.get(request)?.let { emit(it); return@flow }
+                if(request.metadata!=null)cache.discardEmbedded(key)
                 emit(LyricsState(key, message = "正在读取歌词…"))
                 try {
-                    val embedded = if (request.metadata.isEmpty()) null else withContext(Dispatchers.Default) { EmbeddedLyrics.parse(request.metadata) }
+                    val embedded = if (request.metadata.isNullOrEmpty()) null else withContext(Dispatchers.Default) { EmbeddedLyrics.parse(request.metadata) }
                     val lyrics = embedded ?: cache.get(key)?.takeUnless { it.embedded }?.lyrics ?: load(track)
                     val state = when {
                         lyrics == null -> LyricsState(key, message = "未找到内嵌歌词或同名 .lrc 歌词")

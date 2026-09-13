@@ -11,6 +11,34 @@ import org.junit.Test
 class LyricsStateFlowTest {
     private fun Flow<Track?>.requests() = map { it?.let(::LyricsRequest) }
     private fun embedded(track:Track,text:String) = LyricsRequest(track,listOf(androidx.media3.extractor.metadata.vorbis.VorbisComment("LYRICS",text)))
+    @Test fun confirmedEmptyMetadataDiscardsEmbeddedCacheAndFallsBackToSidecar() = runTest {
+        val track=Track("song","source","file","Song")
+        val cache=LyricsCache()
+        lyricsStateFlow(flowOf(embedded(track,"[00:00]Old embedded")),cache) { null }.toList()
+        var reads=0
+        val result=lyricsStateFlow(flowOf(LyricsRequest(track,emptyList())),cache) {
+            reads++;LrcParser.parse("[00:00]Current sidecar")
+        }.toList().last()
+        assertEquals(1,reads);assertFalse(result.embedded)
+        assertEquals("Current sidecar",result.lyrics!!.at(0).current)
+    }
+    @Test fun unknownMetadataCanReuseTheSameSongsCacheButEmptyMetadataCannot() = runTest {
+        val track=Track("song","source","file","Song")
+        val cache=LyricsCache()
+        val original=lyricsStateFlow(flowOf(embedded(track,"[00:00]Cached")),cache) { null }.toList().last()
+        val pending=lyricsStateFlow(flowOf(LyricsRequest(track,null)),cache) { error("Must not reload") }.toList()
+        assertEquals(listOf(original),pending)
+        val missing=lyricsStateFlow(flowOf(LyricsRequest(track,emptyList())),cache) { null }.toList().last()
+        assertNull(missing.lyrics);assertNull(cache.get(track.lyricsKey))
+    }
+    @Test fun pendingNewSongDoesNotReuseThePreviousSongsEmbeddedCache() = runTest {
+        val track=Track("song","source","file","Song")
+        val next=track.copy(id="next",fileId="next")
+        val cache=LyricsCache()
+        lyricsStateFlow(flowOf(embedded(track,"[00:00]Old song")),cache) { null }.toList()
+        val state=lyricsStateFlow(flowOf(LyricsRequest(next,null)),cache) { null }.toList().last()
+        assertEquals(next.lyricsKey,state.key);assertNull(state.lyrics)
+    }
     @Test fun embeddedLyricsAvoidSidecarReadsAndSurviveCoverRoundTrips() = runTest {
         val track=Track("song","source","file","Song")
         val cache=LyricsCache()

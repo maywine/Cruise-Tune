@@ -85,6 +85,7 @@ class PlaybackService : MediaLibraryService() {
         }
         player.addListener(object : Player.Listener {
             override fun onEvents(player: Player, events: Player.Events) {
+                app.playbackMetadata.value=PlaybackMetadata.from(player)
                 if (applying || !ready.isCompleted) return
                 if (player.playbackState == Player.STATE_ENDED) persistedIntent = false
                 if (player.playerError == null && (events.contains(Player.EVENT_PLAYER_ERROR) || (events.contains(Player.EVENT_PLAYBACK_STATE_CHANGED) && player.playbackState == Player.STATE_READY))) updateExtras()
@@ -264,6 +265,7 @@ class PlaybackService : MediaLibraryService() {
         screenOff.stop()
         persist(); writes.close(); cancelPrefetch(); scope.cancel()
         session.release(); player.release()
+        app.playbackMetadata.value=PlaybackMetadata()
         super.onDestroy()
     }
     private fun <T> future(block: suspend () -> T): ListenableFuture<T> {
