@@ -75,7 +75,7 @@ class LookAheadPrefetch(
                         try {
                             work.await()
                             ensureActive()
-                            if (!isComplete(track)) throw java.io.EOFException("Incomplete cache")
+                            if (!isComplete(track)) throw com.cruisetune.player.core.UserError("歌曲缓存尚未完整，将继续重试", retryable = true)
                             attempts.remove(key); nextAttempt.remove(key)
                         } catch (e: CancellationException) {
                             attempt.cancel(); work.cancel(); throw e
@@ -103,4 +103,5 @@ class LookAheadPrefetch(
         }
     }
     fun cancel() { allowed = false; signature = emptyList(); job?.cancel(); active?.cancel() }
+    suspend fun cancelAndJoin() { val previous = job; cancel(); previous?.join() }
 }

@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.Executors
+import java.util.concurrent.ConcurrentHashMap
 
 @UnstableApi
 class MediaCache(private val app: CruiseApplication) {
@@ -40,12 +41,37 @@ class MediaCache(private val app: CruiseApplication) {
     val stream = SimpleCache(File(app.filesDir, "stream-cache"), LeastRecentlyUsedCacheEvictor(streamLimitBytes), databaseProvider)
     val offline = SimpleCache(File(app.filesDir, "offline-cache"), NoOpCacheEvictor(), databaseProvider)
     private val network = DataSource.Factory { ResolvingTrackSource(app) }
+    internal class Bypass(val key: String)
+    private val bypasses = ConcurrentHashMap<String, Bypass>()
+    private val streamReads = java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+    private val offlineReads = java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+    private fun cacheReader(reads: MutableSet<String>) = FileDataSource.Factory().setListener(object : TransferListener {
+        override fun onTransferInitializing(source: DataSource, spec: DataSpec, isNetwork: Boolean) { spec.key?.let(reads::add) }
+        override fun onTransferStart(source: DataSource, spec: DataSpec, isNetwork: Boolean) {}
+        override fun onBytesTransferred(source: DataSource, spec: DataSpec, isNetwork: Boolean, bytes: Int) {}
+        override fun onTransferEnd(source: DataSource, spec: DataSpec, isNetwork: Boolean) {}
+    })
     val streamFactory: CacheDataSource.Factory = CacheDataSource.Factory().setCache(stream)
+        .setCacheReadDataSourceFactory(cacheReader(streamReads))
         .setCacheWriteDataSinkFactory { CompletingCacheSink(CacheDataSink.Factory().setCache(stream)) }
         .setUpstreamDataSourceFactory(network).setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
-    val playbackFactory: CacheDataSource.Factory = CacheDataSource.Factory().setCache(offline)
+    private val cachedPlaybackFactory = CacheDataSource.Factory().setCache(offline)
+        .setCacheReadDataSourceFactory(cacheReader(offlineReads))
         .setCacheWriteDataSinkFactory(null).setUpstreamDataSourceFactory(streamFactory)
         .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+    val playbackFactory = DataSource.Factory { PlaybackDataSource(cachedPlaybackFactory, network, ::isBypassed) { key ->
+        if (key != null) { streamReads.remove(key); offlineReads.remove(key) }
+    } }
+    internal fun isBypassed(key: String?) = key != null && bypasses.containsKey(key)
+    internal fun canRepairStreaming(track: Track) = track.localUri.isBlank() && track.cacheKey in streamReads && track.cacheKey !in offlineReads
+    internal fun beginBypass(track: Track) = Bypass(track.cacheKey).also { bypasses[it.key] = it }
+    internal fun endBypass(bypass: Bypass) { bypasses.remove(bypass.key, bypass) }
+    internal suspend fun repairStreaming(track: Track, bypass: Bypass) {
+        StreamCacheRepair(stream, network, app.cacheDir, streamLimitBytes, { hasRoom }).repair(track,
+            versionCurrent = { app.library.findTrack(track.id)?.cacheKey == track.cacheKey }) {
+            bypasses[track.cacheKey] === bypass
+        }
+    }
     val downloadManager = DownloadManager(app, app.offlineIndex,
         DefaultDownloaderFactory(CacheDataSource.Factory().setCache(offline).setUpstreamDataSourceFactory(network), Executors.newFixedThreadPool(2))).apply {
         maxParallelDownloads = 1

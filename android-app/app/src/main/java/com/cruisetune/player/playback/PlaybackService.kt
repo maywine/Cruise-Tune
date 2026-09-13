@@ -55,6 +55,16 @@ class PlaybackService : MediaLibraryService() {
     private var prefetchMessage: String? = null
     private var capacityMessage: String? = null
     private var prefetchGate = "未调度"
+    private val recoveryPolicy = PlaybackRecoveryPolicy()
+    private data class Recovery(val track: Track, val bypass: MediaCache.Bypass, val position: Long,
+        val started: Long = android.os.SystemClock.elapsedRealtime(), var rebuilding: Boolean = false)
+    private var recovery: Recovery? = null
+    private var recoveryAction: Job? = null
+    private var recoveryRepair: Job? = null
+    private var recoveryGeneration = 0L
+    private var automaticPlaybackChange = false
+    private var recoveryNotice: String? = null
+    private var clearRecoveryNoticeOnProgress = false
     private val prefetch by lazy { LookAheadPrefetch(scope, app.media::isPrefetchComplete, app.media::prefetchAttempt,
         android.os.SystemClock::elapsedRealtime, report = { message ->
             if (message != prefetchMessage) { prefetchMessage = message; updateExtras() }
@@ -63,7 +73,7 @@ class PlaybackService : MediaLibraryService() {
     override fun onCreate() {
         super.onCreate()
         player = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(app.media.playbackFactory).setLoadErrorHandlingPolicy(PersistentNetworkLoadPolicy()))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(app.media.playbackFactory).setLoadErrorHandlingPolicy(PersistentNetworkLoadPolicy(app.media::isBypassed)))
             .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(20000, 60000, 1500, 3500).build())
             .build().apply {
                 setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
@@ -95,12 +105,29 @@ class PlaybackService : MediaLibraryService() {
                 if (events.containsAny(Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_REPEAT_MODE_CHANGED, Player.EVENT_TIMELINE_CHANGED, Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED)) cancelPrefetch()
                 maybePrefetch()
             }
-            override fun onPlayerError(error: PlaybackException) { updateExtras(readableError(error.cause ?: error)) }
+            override fun onPlayerError(error: PlaybackException) { handlePlaybackFailure(error) }
+            override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+                if (!automaticPlaybackChange && reason == Player.DISCONTINUITY_REASON_SEEK) {
+                    cancelRecovery(); recoveryPolicy.reset()
+                }
+            }
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                if (recovery?.track?.id != mediaItem?.mediaId) cancelRecovery()
+                if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO || reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT) recoveryPolicy.reset()
+            }
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                if (!automaticPlaybackChange && !playWhenReady) {
+                    val wasRecovering = recovery != null
+                    cancelRecovery()
+                    if (wasRecovering) player.stop()
+                }
                 if (playWhenReady && screenOff.isScreenOff()) { pauseForScreenOff(); return }
                 if (!applying && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) {
                     persistedIntent = playWhenReady
-                    if (playWhenReady) screenOffObserved = false
+                    if (playWhenReady) {
+                        screenOffObserved = false
+                        if (!automaticPlaybackChange) { recoveryPolicy.reset(); recoveryNotice = null; updateExtras() }
+                    }
                 }
             }
         })
@@ -124,6 +151,7 @@ class PlaybackService : MediaLibraryService() {
             while (isActive) {
                 delay(2000)
                 screenOff.checkNow()
+                checkRecoveryProgress()
                 if (player.isPlaying) persist()
                 if (!app.media.hasRoom) {
                     app.media.downloadManager.currentDownloads.filter { it.state == androidx.media3.exoplayer.offline.Download.STATE_DOWNLOADING }
@@ -136,25 +164,141 @@ class PlaybackService : MediaLibraryService() {
     private fun pauseForScreenOff() {
         screenOffObserved = true
         persistedIntent = false
+        val wasRecovering = recovery != null
+        cancelRecovery()
         // pause() also clears playWhenReady while buffering / waiting for network recovery.
         player.pause()
+        if (wasRecovering) player.stop()
         cancelPrefetch()
         if (ready.isCompleted) persist()
         updateExtras()
     }
-    private fun prepareAndPlay() {
+    private fun prepareAndPlay(restartCurrent: Boolean = false) {
         if (screenOff.isScreenOff()) { pauseForScreenOff(); return }
         screenOffObserved = false
-        player.prepare(); player.play()
+        if (restartCurrent) PlaybackOperations.retry(player)
+        else { player.prepare(); player.play() }
     }
     private fun snapshot() = PlaybackSnapshot(revision, entries, player.currentMediaItemIndex.coerceAtLeast(0), if (player.playbackState == Player.STATE_ENDED) 0 else player.currentPosition.coerceAtLeast(0), persistedIntent, player.repeatMode, shuffled)
     private fun persist() { if (!applying && entries.isNotEmpty()) save(snapshot()) }
     private fun updateExtras(error: String? = null) {
         session.setSessionExtras(Bundle().apply { putBoolean("shuffled", shuffled); if(entries.isNotEmpty())queueSort?.let { putString("queueSort", it.name) }; putBoolean("needsLogin", userError(player.playerError)?.needsLogin == true); if (packageName.endsWith(".authcheck")) putString("prefetchGate", prefetchGate); (capacityMessage ?: prefetchMessage)?.let { putString("prefetchStatus", it) };
+            recoveryNotice?.let { putString("recoveryStatus", it) }
             (error ?: player.playerError?.let { readableError(it.cause ?: it) })?.let { putString("error", it) } })
+    }
+    private fun cancelRecovery() {
+        recoveryGeneration++
+        recoveryAction?.cancel(); recoveryAction = null
+        recoveryRepair?.cancel(); recoveryRepair = null
+        recovery?.let { app.media.endBypass(it.bypass) }
+        recovery = null; recoveryNotice = null; clearRecoveryNoticeOnProgress = false
+    }
+    private fun hasNetwork(): Boolean {
+        val manager = getSystemService(android.net.ConnectivityManager::class.java) ?: return false
+        return manager.getNetworkCapabilities(manager.activeNetwork)?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+    }
+    private fun handlePlaybackFailure(error: PlaybackException) {
+        updateExtras(readableError(error.cause ?: error))
+        val track = entries.getOrNull(player.currentMediaItemIndex)?.track ?: return
+        if (!ready.isCompleted || !player.playWhenReady || screenOff.isScreenOff() ||
+            player.playbackSuppressionReason != Player.PLAYBACK_SUPPRESSION_REASON_NONE) return
+        if (PlaybackRecoveryPolicy.isSharedFailure(error) || (recovery == null && !PlaybackRecoveryPolicy.isFileFailure(error))) {
+            cancelRecovery(); updateExtras(readableError(error.cause ?: error)); return
+        }
+        val generation = recoveryGeneration
+        recoveryAction?.cancel()
+        recoveryAction = scope.launch {
+            try {
+            // Leave the listener dispatch before issuing new player commands. User actions can cancel this turn.
+            yield()
+            commandLock.withLock {
+                if (generation != recoveryGeneration || player.currentMediaItem?.mediaId != track.id ||
+                    player.playerError !== error || !player.playWhenReady || screenOff.isScreenOff()) return@withLock
+                val canRepair = app.media.canRepairStreaming(track)
+                if (canRepair && recovery == null && !hasNetwork()) {
+                    recoveryNotice = "当前歌曲读取失败，联网后可重试"; updateExtras(); return@withLock
+                }
+                if (canRepair && recovery == null && recoveryPolicy.tryRecovery(track.cacheKey)) {
+                    cancelPrefetch()
+                    val attempt = Recovery(track, app.media.beginBypass(track), player.currentPosition.coerceAtLeast(0))
+                    recovery = attempt
+                    recoveryNotice = "缓存读取异常，正在重新读取（1/1）"
+                    automaticPlaybackChange = true
+                    try { prepareAndPlay(restartCurrent = true) } finally { automaticPlaybackChange = false }
+                    updateExtras()
+                } else {
+                    skipFailedTrack(track)
+                }
+            }
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) {
+                cancelRecovery(); player.pause(); persistedIntent = false
+                updateExtras("自动恢复未完成，请手动重试")
+            }
+        }
+    }
+    private fun skipFailedTrack(track: Track) {
+        recovery?.let { app.media.endBypass(it.bypass) }; recovery = null
+        recoveryRepair?.cancel(); recoveryRepair = null
+        recoveryPolicy.failed(track.cacheKey)
+        val next = recoveryPolicy.nextIndex(entries.map { it.track.cacheKey }, player.currentMediaItemIndex) { index ->
+            val repeat = if (player.repeatMode == Player.REPEAT_MODE_ONE) Player.REPEAT_MODE_OFF else player.repeatMode
+            player.currentTimeline.getNextWindowIndex(index, repeat, player.shuffleModeEnabled)
+        }
+        automaticPlaybackChange = true
+        try {
+            if (next == null) {
+                if (player.playbackState != Player.STATE_IDLE) player.stop()
+                player.pause(); persistedIntent = false
+                recoveryNotice = "没有可继续播放的歌曲，请检查文件后重试"
+            } else {
+                cancelPrefetch()
+                player.seekTo(next, 0); prepareAndPlay()
+                recoveryNotice = "已跳过无法播放的歌曲"; clearRecoveryNoticeOnProgress = true
+            }
+        } finally { automaticPlaybackChange = false }
+        persist(); updateExtras()
+    }
+    private fun checkRecoveryProgress() {
+        if (clearRecoveryNoticeOnProgress && player.isPlaying && player.currentPosition >= 1500) {
+            recoveryNotice = null; clearRecoveryNoticeOnProgress = false; updateExtras()
+        }
+        val attempt = recovery ?: return
+        if (player.currentMediaItem?.mediaId != attempt.track.id || !player.playWhenReady || screenOff.isScreenOff()) {
+            cancelRecovery(); updateExtras(); return
+        }
+        if (!attempt.rebuilding && android.os.SystemClock.elapsedRealtime() - attempt.started >= 45000 &&
+            player.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_NONE &&
+            (!player.isPlaying || player.currentPosition < attempt.position + 1500)) {
+            if (hasNetwork()) skipFailedTrack(attempt.track)
+            else {
+                cancelRecovery(); player.stop()
+                recoveryNotice = "网络不可用，请联网后重试"; updateExtras()
+            }
+            return
+        }
+        if (attempt.rebuilding || !player.isPlaying || player.currentPosition < attempt.position + 1500) return
+        attempt.rebuilding = true
+        recoveryNotice = "已恢复播放，正在重建当前歌曲缓存"; updateExtras()
+        recoveryRepair = scope.launch {
+            try {
+                prefetch.cancelAndJoin()
+                app.media.repairStreaming(attempt.track, attempt.bypass)
+                if (recovery !== attempt) return@launch
+                app.media.endBypass(attempt.bypass); recovery = null
+                recoveryNotice = null; updateExtras(); maybePrefetch()
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) {
+                if (recovery === attempt) {
+                    // The uncached playback can continue even if the background replacement fails.
+                    recoveryNotice = "已恢复播放，缓存修复未完成"; updateExtras()
+                }
+            }
+        }
     }
     private suspend fun playTrack(id: String, sourceId: String?) {
         ready.await()
+        cancelRecovery(); recoveryPolicy.reset()
         val order = TrackSort.fromPreference(app.preferences.getString(TrackSort.PREFERENCE, null))
         val tracks = withContext(Dispatchers.IO) { order.sorted(app.database.tracks(sourceId)).let { list ->
             if (list.any { it.id == id }) list else listOfNotNull(app.database.findTrack(id))
@@ -174,6 +318,7 @@ class PlaybackService : MediaLibraryService() {
     }
     private suspend fun removeSources(ids: Set<String>) {
         if (ids.isEmpty()) return
+        cancelRecovery(); recoveryPolicy.reset()
         val before = snapshot()
         val remaining = SourceRemoval.queue(before, ids, maxOf(revision + 1, System.currentTimeMillis()))
         val removedIds = withContext(Dispatchers.IO) { app.database.trackIdsForSources(ids) } +
@@ -200,26 +345,21 @@ class PlaybackService : MediaLibraryService() {
     private suspend fun toggleShuffle() {
         ready.await()
         if (entries.isEmpty()) return
-        val position = player.currentPosition
-        val playing = player.playWhenReady
-        val (ordered, index) = QueuePolicy.reorder(entries, player.currentMediaItem?.mediaId, !shuffled)
+        val (ordered, _) = QueuePolicy.reorder(entries, player.currentMediaItem?.mediaId, !shuffled)
         applying = true
-        entries = ordered; shuffled = !shuffled; revision = maxOf(revision + 1, System.currentTimeMillis())
-        save(PlaybackSnapshot(revision, entries, index, position, persistedIntent, player.repeatMode, shuffled), true)
-        player.setMediaItems(entries.map { app.media.mediaItem(it.track) }, index, position)
-        player.prepare(); player.playWhenReady = playing
-        applying = false; updateExtras(); cancelPrefetch()
+        try {
+            PlaybackOperations.reorder(player, ordered)
+            entries = ordered; shuffled = !shuffled; revision = maxOf(revision + 1, System.currentTimeMillis())
+            save(snapshot(), true)
+        } finally { applying = false }
+        updateExtras(); cancelPrefetch(); maybePrefetch()
     }
     private fun sortQueue(order: TrackSort) {
         if (entries.isEmpty()) return
         val sorted = order.queue(snapshot(), maxOf(revision + 1, System.currentTimeMillis()))
         applying = true
         try {
-            // Move existing media items so the active decoder, buffer and position survive sorting.
-            sorted.entries.forEachIndexed { target, entry ->
-                val from = (target until player.mediaItemCount).first { player.getMediaItemAt(it).mediaId == entry.track.id }
-                if (from != target) player.moveMediaItem(from, target)
-            }
+            PlaybackOperations.reorder(player, sorted.entries)
             entries = sorted.entries; revision = sorted.revision; shuffled = false
             save(snapshot(), true)
             rememberQueueSort(order)
@@ -232,7 +372,7 @@ class PlaybackService : MediaLibraryService() {
     }
     private fun cancelPrefetch() { prefetch.cancel() }
     private fun maybePrefetch() {
-        if (!ready.isCompleted || applying) return
+        if (!ready.isCompleted || applying || recovery != null) return
         val wanted = LookAheadPlan.select(entries.map { it.track }, player.currentMediaItemIndex, player.repeatMode, nextIndex = { index ->
             player.currentTimeline.getNextWindowIndex(index, player.repeatMode, player.shuffleModeEnabled)
         })
@@ -263,6 +403,7 @@ class PlaybackService : MediaLibraryService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession = session
     override fun onDestroy() {
         screenOff.stop()
+        cancelRecovery()
         persist(); writes.close(); cancelPrefetch(); scope.cancel()
         session.release(); player.release()
         app.playbackMetadata.value=PlaybackMetadata()
@@ -301,7 +442,7 @@ class PlaybackService : MediaLibraryService() {
                         }
                         updateExtras("已清除本机 Token 授权")
                     }
-                    RETRY -> { cancelPrefetch(); updateExtras(); prepareAndPlay() }
+                    RETRY -> { cancelRecovery(); recoveryPolicy.reset(); cancelPrefetch(); prepareAndPlay(restartCurrent = true); updateExtras() }
                     else -> return@future SessionResult(SessionError.ERROR_NOT_SUPPORTED)
                 }
                 SessionResult(SessionResult.RESULT_SUCCESS)
@@ -333,6 +474,7 @@ class PlaybackService : MediaLibraryService() {
         override fun onSetMediaItems(session: MediaSession, controller: MediaSession.ControllerInfo, mediaItems: MutableList<MediaItem>, startIndex: Int, startPositionMs: Long): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = future {
             ready.await()
             commandLock.withLock {
+            cancelRecovery(); recoveryPolicy.reset()
             val requestedId = mediaItems.getOrNull(startIndex.coerceAtLeast(0))?.mediaId
             val tracks = withContext(Dispatchers.IO) {
                 val selected = mediaItems.mapNotNull { app.database.findTrack(it.mediaId) }

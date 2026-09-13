@@ -22,6 +22,7 @@ fun readableError(error: Throwable): String = userError(error)?.message ?: when 
     is java.net.UnknownHostException -> "暂无网络，已保留播放位置"
     is java.net.SocketTimeoutException -> "连接超时，请检查网络后重试"
     is SecurityException -> "目录访问权限已失效，请重新选择目录"
+    is java.io.EOFException -> "音频文件不完整或已损坏，请检查源文件"
     is java.io.IOException -> "读取失败，请检查网络或文件是否可用"
     else -> "暂时无法完成，请重试"
 }

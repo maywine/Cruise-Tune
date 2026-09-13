@@ -66,4 +66,17 @@ class LookAheadPrefetchTest {
         cache.update(listOf(tracks()[1]),true);runCurrent();advanceTimeBy(60000);runCurrent();assertEquals(1,calls)
         cache.cancel();runCurrent()
     }
+    @Test fun incompleteCacheCoverageStillRetriesUntilTheWholeTrackIsAvailable() = runTest {
+        var calls=0;var complete=false
+        val cache=LookAheadPrefetch(backgroundScope,{complete},{object:PrefetchAttempt {
+            override suspend fun cache(){calls++;if(calls==3)complete=true}
+            override fun cancel(){}
+        }},{testScheduler.currentTime},retryDelay={10},workerDispatcher=StandardTestDispatcher(testScheduler))
+        cache.update(listOf(tracks()[1]),true);runCurrent()
+        assertEquals(1,calls);assertFalse(complete)
+        repeat(2){advanceTimeBy(2000);runCurrent()}
+        assertTrue(complete);assertEquals(3,calls)
+        advanceTimeBy(10000);runCurrent();assertEquals(3,calls)
+        cache.cancel();runCurrent()
+    }
 }

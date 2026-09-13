@@ -12,6 +12,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.TextView
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
+import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -41,6 +42,27 @@ class PlaybackOrderDeviceTest {
     }
     private fun views(view:View):List<View> = listOf(view)+if(view is ViewGroup)(0 until view.childCount).flatMap { views(view.getChildAt(it)) } else emptyList()
 
+    private fun sessionPlayer():Player {
+        // MediaController extrapolates progress. Inspect the isolated session's engine instead.
+        val sessions=MediaSession::class.java.getDeclaredField("SESSION_ID_TO_SESSION_MAP").apply { isAccessible=true }.get(null) as Map<*,*>
+        return sessions.values.filterIsInstance<MediaSession>().single { it.id.isEmpty() }.player
+    }
+    private fun assertProgressAdvances(player:Player,trackId:String) {
+        var previous=0L
+        main { previous=player.currentPosition }
+        repeat(3) {
+            SystemClock.sleep(1200)
+            main {
+                assertEquals(trackId,player.currentMediaItem?.mediaId)
+                assertNull(player.playerError)
+                assertTrue(player.isPlaying)
+                val position=player.currentPosition
+                assertTrue("Actual playback must keep advancing: $previous -> $position",position>=previous+300)
+                previous=position
+            }
+        }
+    }
+
     @Test fun secondaryOrderControlPreservesPlaybackAndReplacesSettingsEntries() {
         check(app.packageName.endsWith(".authcheck")) { "Use the isolated validation application" }
         check(app.database.sources().isEmpty() && app.database.restore().entries.isEmpty()) { "Use an empty test library and queue" }
@@ -53,6 +75,11 @@ class PlaybackOrderDeviceTest {
         val previousLyrics=app.preferences.getBoolean("showLyrics",false)
         var activity:MainActivity?=null
         var observer:MediaController?=null
+        var engine:Player?=null
+        val stateChanges=mutableListOf<Int>()
+        val stateListener=object:Player.Listener {
+            override fun onPlaybackStateChanged(playbackState:Int) { stateChanges+=playbackState }
+        }
         try {
             app.database.saveSource(source);app.database.replaceScan(source.id,tracks)
             app.preferences.edit().putString(TrackSort.PREFERENCE,TrackSort.PATH_ASC.name).putBoolean("showLyrics",false).commit()
@@ -62,6 +89,7 @@ class PlaybackOrderDeviceTest {
             main { future=MediaController.Builder(app,SessionToken(app,ComponentName(app,PlaybackService::class.java))).buildAsync() }
             val c=future.get(10,TimeUnit.SECONDS);observer=c
             main {
+                engine=sessionPlayer()
                 c.setAudioAttributes(c.audioAttributes,false)
                 if(screen.findViewById<View>(R.id.player_details)==null)
                     MainActivity::class.java.getDeclaredMethod("showTrackDetails").apply { isAccessible=true }.invoke(screen)
@@ -75,7 +103,7 @@ class PlaybackOrderDeviceTest {
             command(PlaybackService.PLAY_TRACK,Bundle().apply { putString("trackId",tracks[2].id);putString("sourceId",source.id) })
             await("Synthetic audio must load") { c.playbackState==Player.STATE_READY && screen.findViewById<View>(R.id.player_order_toggle).isEnabled }
             main { c.pause();c.seekTo(12000);c.repeatMode=Player.REPEAT_MODE_ONE }
-            await("Paused seek must finish") { c.currentPosition==12000L && !c.playWhenReady }
+            await("Paused seek must finish") { engine!!.playbackState==Player.STATE_READY && engine!!.currentPosition==12000L && !engine!!.playWhenReady }
             fun waitOrder(random:Boolean) = await("Mode must reflect the committed queue state") {
                 c.sessionExtras.getBoolean("shuffled")==random && c.playbackState==Player.STATE_READY &&
                     screen.findViewById<TextView>(R.id.player_order_toggle).text.toString()==(if(random)"随机"else"顺序") &&
@@ -101,10 +129,33 @@ class PlaybackOrderDeviceTest {
                 assertEquals(12000L,c.currentPosition);assertFalse(c.playWhenReady)
                 c.play()
             }
-            await("Synthetic audio must play") { c.isPlaying }
-            main { screen.findViewById<View>(R.id.player_order_toggle).performClick() }
-            waitOrder(true)
-            main { assertEquals(tracks[2].id,c.currentMediaItem?.mediaId);assertTrue(c.playWhenReady);assertTrue(c.currentPosition>=12000);c.pause() }
+            await("Synthetic audio must play") { engine!!.isPlaying }
+            assertProgressAdvances(engine!!,tracks[2].id)
+            main { engine!!.addListener(stateListener) }
+            for(random in listOf(true,false)) {
+                main { stateChanges.clear();screen.findViewById<View>(R.id.player_order_toggle).performClick() }
+                waitOrder(random)
+                assertProgressAdvances(engine!!,tracks[2].id)
+                main {
+                    assertFalse("Changing order must not discard the active buffer",Player.STATE_BUFFERING in stateChanges)
+                    assertFalse("Changing order must not stop playback",Player.STATE_IDLE in stateChanges)
+                    assertEquals(Player.REPEAT_MODE_ONE,engine!!.repeatMode)
+                }
+            }
+            main { c.pause();c.seekTo(18000) }
+            await("Paused retry position must be applied") { engine!!.playbackState==Player.STATE_READY && engine!!.currentPosition==18000L && !engine!!.playWhenReady }
+            main { stateChanges.clear() }
+            command(PlaybackService.RETRY,Bundle.EMPTY)
+            await("Explicit retry must resume playback") { engine!!.isPlaying }
+            main {
+                assertTrue("Retry must stop the old load",Player.STATE_IDLE in stateChanges)
+                assertTrue("Retry must prepare a new load",Player.STATE_BUFFERING in stateChanges)
+                assertEquals(tracks.map { it.id },(0 until engine!!.mediaItemCount).map { engine!!.getMediaItemAt(it).mediaId })
+                assertEquals(Player.REPEAT_MODE_ONE,engine!!.repeatMode)
+                assertTrue(engine!!.currentPosition>=18000)
+            }
+            assertProgressAdvances(engine!!,tracks[2].id)
+            main { c.pause();engine!!.removeListener(stateListener) }
             instrument.waitForIdleSync()
             main {
                 for(id in listOf(R.id.player_lyrics_toggle,R.id.player_order_toggle,R.id.player_offline,R.id.player_previous,R.id.player_play,R.id.player_next)) {
@@ -134,7 +185,7 @@ class PlaybackOrderDeviceTest {
             root.findAccessibilityNodeInfosByText("完成").first { it.text?.toString()=="完成" && it.isClickable }.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             assertArrayEquals(bytes,file.readBytes())
         } finally {
-            main { observer?.let { it.pause();it.setAudioAttributes(it.audioAttributes,true);it.release() };activity?.finish() }
+            main { engine?.removeListener(stateListener);observer?.let { it.pause();it.setAudioAttributes(it.audioAttributes,true);it.release() };activity?.finish() }
             runBlocking { app.library.removeSources(setOf(source.id),PlaybackSnapshot()) }
             app.preferences.edit().putBoolean("showLyrics",previousLyrics).apply {
                 if(previousSort==null)remove(TrackSort.PREFERENCE)else putString(TrackSort.PREFERENCE,previousSort)

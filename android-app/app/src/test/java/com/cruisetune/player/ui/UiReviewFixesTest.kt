@@ -94,7 +94,7 @@ class UiReviewFixesTest {
         shadowOf(Looper.getMainLooper()).idle()
     }
     @Test fun coreControlsFitShortAndNarrowLandscapeAndLargeText() {
-        for ((w,h,font) in listOf(Triple(640,360,1f),Triple(667,375,1f),Triple(853,480,1f),Triple(1280,720,1f),Triple(640,360,1.6f),Triple(360,640,1f),Triple(360,640,1.6f))) {
+        for ((w,h,font) in listOf(Triple(640,360,1f),Triple(667,375,1f),Triple(853,480,1f),Triple(1280,720,1f),Triple(1920,1080,1f),Triple(640,360,1.6f),Triple(360,640,1f),Triple(360,640,1.6f))) {
             RuntimeEnvironment.setQualifiers("w${w}dp-h${h}dp-${if(w>h) "land" else "port"}-mdpi")
             RuntimeEnvironment.setFontScale(font)
             val controller=Robolectric.buildActivity(MainActivity::class.java).create().start().resume().visible()
@@ -121,6 +121,11 @@ class UiReviewFixesTest {
                     assertEquals("$w x $h: playback controls must align with the player panel",now.left,footer.left)
                     assertEquals("$w x $h: playback controls must align with the player panel",now.right,footer.right)
                     assertTrue("$w x $h: playback controls must stay outside the queue",footer.right<tabs.left)
+                    val previous=Rect();val next=Rect()
+                    a.findViewById<View>(R.id.player_previous).getGlobalVisibleRect(previous)
+                    a.findViewById<View>(R.id.player_next).getGlobalVisibleRect(next)
+                    assertEquals("$w x $h: previous must reach the left edge",footer.left,previous.left)
+                    assertEquals("$w x $h: next must reach the right edge",footer.right,next.right)
                 }
             } finally {controller.pause().stop().destroy()}
         }

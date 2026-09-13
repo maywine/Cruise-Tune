@@ -318,7 +318,7 @@ class MainActivity : CruiseActivity() {
         root.addView(body,LinearLayout.LayoutParams(-1,0,1f).apply{topMargin=dp(8)})
 
         val footer=FrameLayout(this).apply{id=R.id.player_footer;setPadding(0,dp(8),0,0)}
-        val row=BoundedControlRow(this,480).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
+        val row=(if(spec.landscape)LinearLayout(this)else BoundedControlRow(this,480)).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
         fun addFooter(button:TouchButton,weight:Float){button.minHeight=dp(76);button.setPadding(dp(8),0,dp(8),0);row.addView(button,LinearLayout.LayoutParams(0,dp(76),weight).apply{if(row.childCount>0)marginStart=dp(8)})}
         previous=TouchButton(this,"上一首").apply{id=R.id.player_previous;textSize=if(compact)18f else 22f;setOnClickListener{controller?.let{if(it.hasPreviousMediaItem())it.seekToPreviousMediaItem()else it.seekTo(0)}}}
         next=TouchButton(this,"下一首").apply{id=R.id.player_next;textSize=if(compact)18f else 22f;setOnClickListener{controller?.seekToNextMediaItem()}}
@@ -472,7 +472,7 @@ class MainActivity : CruiseActivity() {
         updatePlaybackAction(playAction)
         previous.isEnabled = c.mediaItemCount > 0
         next.isEnabled = c.hasNextMediaItem()
-        banner.updateText(c.sessionExtras.getString("error") ?: when {
+        banner.updateText(c.sessionExtras.getString("recoveryStatus") ?: c.sessionExtras.getString("error") ?: when {
             c.playerError != null -> readableError(c.playerError?.cause ?: c.playerError!!)
             c.playWhenReady && c.playbackState == Player.STATE_BUFFERING -> "正在缓冲"
             c.isPlaying -> "正在播放"

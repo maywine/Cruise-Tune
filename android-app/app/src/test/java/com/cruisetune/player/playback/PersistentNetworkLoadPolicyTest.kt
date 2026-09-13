@@ -14,6 +14,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.IOException
+import java.io.EOFException
 import java.net.SocketTimeoutException
 
 @RunWith(RobolectricTestRunner::class)
@@ -36,5 +37,30 @@ class PersistentNetworkLoadPolicyTest {
         assertEquals(C.TIME_UNSET,p.getRetryDelayMsFor(info(UserError("Expired",needsLogin=true),1)))
         assertEquals(C.TIME_UNSET,p.getRetryDelayMsFor(info(InvalidMediaRange(),1)))
         assertFalse(NetworkRetry.isTransient(java.io.FileNotFoundException()))
+    }
+    @Test fun parserAndLocalEofDoNotRetryEvenWhenWrapped() {
+        val p = PersistentNetworkLoadPolicy()
+        for (error in listOf(EOFException(), IOException(EOFException()),
+            androidx.media3.common.ParserException.createForMalformedContainer("Truncated audio", EOFException()))) {
+            assertFalse(NetworkRetry.isTransient(error))
+            assertEquals(C.TIME_UNSET, p.getRetryDelayMsFor(info(error, 1)))
+        }
+        assertEquals("音频文件不完整或已损坏，请检查源文件", readableError(EOFException("private file path")))
+    }
+    @Test fun httpReadInterruptionStillRetriesEvenWhenItsCauseIsEof() {
+        val error = HttpDataSource.HttpDataSourceException(EOFException(),
+            DataSpec.Builder().setUri("https://music.test/song").build(),
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+            HttpDataSource.HttpDataSourceException.TYPE_READ)
+        assertTrue(NetworkRetry.isTransient(error))
+        assertEquals(30000L, PersistentNetworkLoadPolicy().getRetryDelayMsFor(info(error, 1000000)))
+    }
+    @Test fun recoveryLoadIsBoundedWithoutChangingNormalWeakNetworkRetries() {
+        val policy = PersistentNetworkLoadPolicy { it == "recovering" }
+        fun failure(key: String) = LoadErrorHandlingPolicy.LoadErrorInfo(
+            LoadEventInfo(1,DataSpec.Builder().setUri("https://music.test/song").setKey(key).build(),0),
+            MediaLoadData(C.DATA_TYPE_MEDIA),SocketTimeoutException(),1)
+        assertEquals(C.TIME_UNSET, policy.getRetryDelayMsFor(failure("recovering")))
+        assertEquals(2000L, policy.getRetryDelayMsFor(failure("normal")))
     }
 }
