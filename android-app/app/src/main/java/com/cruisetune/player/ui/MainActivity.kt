@@ -83,6 +83,12 @@ class MainActivity : CruiseActivity() {
     private lateinit var next: TouchButton
     private lateinit var recycler: RecyclerView
     private var pendingListPosition: Parcelable? = null
+    private var pendingListStart = false
+    private var submittedTracks: List<Track>? = null
+    private var renderedQueue = false
+    private var libraryListPosition: Parcelable? = null
+    private var libraryListSource: String? = null
+    private val queueFollower = QueueFollower()
     private lateinit var queueTab: TouchButton
     private lateinit var libraryTab: TouchButton
     private lateinit var listTitle: TextView
@@ -134,6 +140,9 @@ class MainActivity : CruiseActivity() {
         Design.applySystemBars(window)
         selectedSource = savedInstanceState?.getString("source")
         showingQueue = savedInstanceState?.getBoolean("queue") ?: false
+        renderedQueue=showingQueue
+        libraryListPosition=savedInstanceState?.getParcelable("libraryListPosition")
+        libraryListSource=savedInstanceState?.getString("libraryListSource")
         showingLyrics = app.preferences.getBoolean("showLyrics", false)
         detailsExpanded = savedInstanceState?.getBoolean("detailsOpen") ?: false
         listPositionBeforeDetails = savedInstanceState?.getParcelable("detailsListPosition")
@@ -281,7 +290,7 @@ class MainActivity : CruiseActivity() {
         val lists=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
         val tabs=LinearLayout(this).apply{id=R.id.player_tabs}
         val tabHeight=if(compact)56 else 64
-        queueTab=TouchButton(this,"队列").apply{minHeight=dp(tabHeight);textSize=20f;setPadding(dp(8),0,dp(8),0);maxLines=1;setOnClickListener{showingQueue=true;renderList()}}
+        queueTab=TouchButton(this,"队列").apply{minHeight=dp(tabHeight);textSize=20f;setPadding(dp(8),0,dp(8),0);maxLines=1;setOnClickListener{showingQueue=true;renderList();queueFollower.revealCurrent()}}
         libraryTab=TouchButton(this,"曲库").apply{minHeight=dp(tabHeight);textSize=20f;setPadding(dp(8),0,dp(8),0);maxLines=1;setOnClickListener{showingQueue=false;renderList()}}
         tabs.addView(queueTab,LinearLayout.LayoutParams(0,dp(tabHeight),1f));tabs.addView(libraryTab,LinearLayout.LayoutParams(0,dp(tabHeight),1f).apply{marginStart=dp(8)});if(!detailsExpanded)lists.addView(tabs)
         tabs.addView(TouchButton(this,"排序").apply {
@@ -296,6 +305,8 @@ class MainActivity : CruiseActivity() {
             askNotificationPermission()
         }
         recycler=RecyclerView(this).apply{id=R.id.player_list;layoutManager=LinearLayoutManager(this@MainActivity);adapter=this@MainActivity.adapter;itemAnimator=null;clipToPadding=true}
+        submittedTracks=null
+        queueFollower.bind(recycler,adapter)
         frame.addView(recycler,FrameLayout.LayoutParams(-1,-1))
         empty=Design.label(this,"添加一个音乐目录\n喜欢的音乐，就在路上",if(compact)18f else 22f,Design.secondary).apply{gravity=Gravity.CENTER;setLineSpacing(dp(6).toFloat(),1f);setOnClickListener{showSources()};isFocusable=true;contentDescription="尚无音乐，点击添加来源"}
         frame.addView(empty,FrameLayout.LayoutParams(-1,-1))
@@ -341,13 +352,36 @@ class MainActivity : CruiseActivity() {
     }
     private fun renderList() {
         if (!::adapter.isInitialized || detailsExpanded) return
+        if(showingQueue!=renderedQueue) {
+            recycler.stopScroll()
+            if(showingQueue) {
+                libraryListPosition=if(pendingListStart)null else pendingListPosition ?: recycler.layoutManager?.onSaveInstanceState()
+                libraryListSource=selectedSource
+                pendingListPosition=null;pendingListStart=false
+            } else {
+                pendingListPosition=libraryListPosition.takeIf { libraryListSource==selectedSource }
+                pendingListStart=pendingListPosition==null
+            }
+            renderedQueue=showingQueue
+        }
         queueTab.selectedState(showingQueue); libraryTab.selectedState(!showingQueue)
         val c = controller
-        val tracks = if (showingQueue && c != null) (0 until c.mediaItemCount).mapNotNull { index ->
-            val item = c.getMediaItemAt(index)
+        val tracks = if (showingQueue) (0 until (c?.mediaItemCount ?: 0)).mapNotNull { index ->
+            val item = c!!.getMediaItemAt(index)
             item.mediaMetadata.extras?.getString("track")?.let { runCatching { JsonCodec.decode(it) }.getOrNull() }
         } else libraryTracks()
-        if (adapter.currentList != tracks) adapter.submitList(tracks) { pendingListPosition?.let { recycler.layoutManager?.onRestoreInstanceState(it) }; pendingListPosition = null }
+        queueFollower.update(showingQueue,c?.currentMediaItem?.mediaId,tracks)
+        val listAdapter=adapter;val listView=recycler
+        fun committed() {
+            if(adapter!==listAdapter || recycler!==listView || listAdapter.currentList!=submittedTracks)return
+            if(pendingListStart)(listView.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0,0)
+            else pendingListPosition?.let { listView.layoutManager?.onRestoreInstanceState(it) }
+            pendingListPosition=null;pendingListStart=false
+            queueFollower.onListCommitted()
+        }
+        // Compare with the last submission: an obsolete in-flight diff must not replace a newer view.
+        if(submittedTracks!=tracks) { submittedTracks=tracks;listAdapter.submitList(tracks) { committed() } }
+        else if(listAdapter.currentList==tracks)committed()
         adapter.updatePlayback(c?.currentMediaItem?.mediaId, playbackLabel(c))
         empty.visibility = if (tracks.isEmpty()) View.VISIBLE else View.GONE
         empty.text = if (showingQueue) "队列还是空的\n从我的曲库选一首音乐" else "添加一个音乐目录\n喜欢的音乐，就在路上"
@@ -959,10 +993,14 @@ class MainActivity : CruiseActivity() {
     private fun toast(text: String) { Toast.makeText(applicationContext, text, Toast.LENGTH_LONG).show() }
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString("source",selectedSource);outState.putBoolean("queue",showingQueue)
+        outState.putParcelable("libraryListPosition",if(!showingQueue && !detailsExpanded && ::recycler.isInitialized) {
+            if(pendingListStart)null else pendingListPosition ?: recycler.layoutManager?.onSaveInstanceState()
+        } else libraryListPosition)
+        outState.putString("libraryListSource",if(!showingQueue)selectedSource else libraryListSource)
         outState.putBoolean("detailsOpen",detailsExpanded)
         outState.putParcelable("detailsListPosition",listPositionBeforeDetails)
         settingsDialog?.takeIf { it.isShowing }?.let { outState.putBoolean("settingsOpen",true);outState.putInt("settingsScroll",panels[it]?.scroll?.scrollY ?: 0) }
         super.onSaveInstanceState(outState)
     }
-    override fun onDestroy() { panels.keys.toList().forEach { it.dismiss() }; controllerFuture?.let(MediaController::releaseFuture); artworkJob?.cancel(); super.onDestroy() }
+    override fun onDestroy() { queueFollower.detach();panels.keys.toList().forEach { it.dismiss() }; controllerFuture?.let(MediaController::releaseFuture); artworkJob?.cancel(); super.onDestroy() }
 }

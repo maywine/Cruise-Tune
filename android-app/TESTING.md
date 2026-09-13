@@ -269,3 +269,23 @@ adb shell am instrument -w -r -e class com.cruisetune.player.TrackTransitionDevi
 仅在空曲库、空队列的独立验证包中运行。测试实际点击下一首、上一首和队列行，并覆盖快速往返与自然播完自动切歌；验证新歌曲不继承旧封面、旧歌手信息或旧歌词，也能显示自身不同的封面和歌词。测试不申请音频焦点，结束时恢复验证包的相关设置并清理自身数据，成功标准为 `OK (1 test)`。
 
 v0.5.16 发布前验证：171 项 Android 主机测试、15 项发布工具测试、8 项连接服务测试、release lint 和本地构建通过。BlueStacks Android 7.1.1 上，切歌元数据归属、内嵌歌词、原有播放详情及目录／排序四项设备回归分别报告 `OK (1 test)`；正式包曲库和音频未改动。release 包未包含合成音频，源码与文档通过隐私检查。
+
+## 队列跟随回归
+
+主机测试覆盖当前项定位、已可见时不滚动、重复状态刷新保留手动浏览位置、触摸／惯性滚动期间等待、排序后的 ID 匹配、空队列，以及列表重建后的行为。
+
+沿用前文生成的 `details-fixture.flac`，在 `android-app/` 下构建、安装独立验证包后执行：
+
+```sh
+./gradlew -PdeviceTestBuildType=authCheck :app:assembleAuthCheck :app:assembleAuthCheckAndroidTest
+adb install -r app/build/outputs/apk/authCheck/app-authCheck.apk
+adb install -r app/build/outputs/apk/androidTest/authCheck/app-authCheck-androidTest.apk
+adb shell am instrument -w -r -e class com.cruisetune.player.QueueFollowDeviceTest \
+  com.cruisetune.player.authcheck.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+测试要求验证包曲库和队列为空，使用 120 首引用合成音频的条目，验证进入队列、上一首／下一首、自然切歌、队列排序、详情返回、重新点播和清空队列；同时检查曲库浏览位置未被跟随覆盖。测试不申请音频焦点，完成后清理自身条目和临时音频，成功标准为 `OK (1 test)`。不在正式包中运行，不使用真实网盘账号。
+
+验证结果：177 项主机测试、lintDebug 和独立验证包构建通过。BlueStacks Android 7.1.1 上，普通横屏、640×360 与 360×640 dp／1.6 倍字体的队列跟随回归分别报告 `OK (1 test)`；原有切歌元数据归属及目录／排序回归也分别通过。测试结束恢复原分辨率与字体设置，未修改正式版曲库或音频文件。
+
+v0.5.17 发布前复验：177 项 Android 主机测试、15 项发布工具测试、8 项连接服务测试、release lint 和本地构建通过；该版本独立验证包的队列跟随、切歌元数据归属及目录／排序回归分别报告 `OK (1 test)`。release 包未包含合成音频，源码与文档通过隐私检查。
