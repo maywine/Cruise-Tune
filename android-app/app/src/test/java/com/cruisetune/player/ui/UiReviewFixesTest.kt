@@ -125,7 +125,7 @@ class UiReviewFixesTest {
             } finally {controller.pause().stop().destroy()}
         }
     }
-    @Test fun landscapeFooterKeepsPlaybackModesInSettings() {
+    @Test fun landscapeFooterKeepsPrimaryActionsAndOrderToggleLeavesSettings() {
         RuntimeEnvironment.setQualifiers("w1280dp-h720dp-land-mdpi")
         val controller=Robolectric.buildActivity(MainActivity::class.java).create().start().resume().visible()
         try {
@@ -134,12 +134,17 @@ class UiReviewFixesTest {
             val controls=views(footer).filterIsInstance<TouchButton>()
             assertEquals(listOf(R.id.player_previous,R.id.player_play,R.id.player_next),controls.map { it.id })
             assertFalse(controls.any { it.text.toString() in listOf("随机","顺序","单曲","循环") })
+            val order=a.findViewById<TouchButton>(R.id.player_order_toggle)
+            assertNotNull(order)
+            val secondary=order.parent as ViewGroup
+            assertEquals(listOf(R.id.player_lyrics_toggle,R.id.player_order_toggle,R.id.player_offline),
+                (0 until secondary.childCount).map { secondary.getChildAt(it).id })
 
             views(a.window.decorView).filterIsInstance<TouchButton>().single { it.text.toString()=="设置" }.performClick()
             val settings=ShadowDialog.getLatestDialog()
             val actions=views(settings.window!!.decorView).filterIsInstance<TouchButton>().map { it.text.toString() }
-            assertTrue(actions.any { it.endsWith("随机播放") })
-            assertTrue(actions.any { it.startsWith("播放顺序：") })
+            assertFalse(actions.any { it.endsWith("随机播放") })
+            assertFalse(actions.any { it.startsWith("播放顺序：") || it.contains("列表循环") || it.contains("单曲循环") })
         } finally {controller.pause().stop().destroy()}
     }
     @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
@@ -155,7 +160,7 @@ class UiReviewFixesTest {
                     0,true,com.cruisetune.player.core.OfflineState.AVAILABLE,"在线")
                 // Configuration height excludes the status bar; the edge-to-edge decor includes it.
                 measure(a,w,h+24)
-                for(id in listOf(R.id.player_artist,R.id.player_album,R.id.player_lyric_current,R.id.player_lyric_next,R.id.player_offline,R.id.player_lyrics_toggle)) {
+                for(id in listOf(R.id.player_artist,R.id.player_album,R.id.player_lyric_current,R.id.player_lyric_next,R.id.player_offline,R.id.player_lyrics_toggle,R.id.player_order_toggle)) {
                     val view=a.findViewById<View>(id);val rect=Rect()
                     val now=a.findViewById<ViewGroup>(R.id.player_now)
                     val sizes=(0 until now.childCount).map { now.getChildAt(it).let { child -> "${child.javaClass.simpleName}:${child.height}" } }
@@ -198,7 +203,7 @@ class UiReviewFixesTest {
                     0,true,com.cruisetune.player.core.OfflineState.AVAILABLE,"在线")
                 measure(a,w,h+24)
                 for(id in listOf(R.id.player_title,R.id.player_seek,R.id.player_times,R.id.player_previous,R.id.player_play,R.id.player_next,
-                    R.id.player_lyric_current,R.id.player_lyric_next,R.id.player_offline,R.id.player_details_navigation)) {
+                    R.id.player_lyric_current,R.id.player_lyric_next,R.id.player_offline,R.id.player_order_toggle,R.id.player_details_navigation)) {
                     val view=a.findViewById<View>(id);val rect=Rect()
                     assertTrue("$w x $h font $font: hidden $id",view.getGlobalVisibleRect(rect))
                     assertEquals("$w x $h font $font: clipped $id",view.height,rect.height())

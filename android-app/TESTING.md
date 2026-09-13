@@ -289,3 +289,21 @@ adb shell am instrument -w -r -e class com.cruisetune.player.QueueFollowDeviceTe
 验证结果：177 项主机测试、lintDebug 和独立验证包构建通过。BlueStacks Android 7.1.1 上，普通横屏、640×360 与 360×640 dp／1.6 倍字体的队列跟随回归分别报告 `OK (1 test)`；原有切歌元数据归属及目录／排序回归也分别通过。测试结束恢复原分辨率与字体设置，未修改正式版曲库或音频文件。
 
 v0.5.17 发布前复验：177 项 Android 主机测试、15 项发布工具测试、8 项连接服务测试、release lint 和本地构建通过；该版本独立验证包的队列跟随、切歌元数据归属及目录／排序回归分别报告 `OK (1 test)`。release 包未包含合成音频，源码与文档通过隐私检查。
+
+## 播放顺序快捷按钮回归
+
+沿用合成 `details-fixture.flac`，仅在空曲库、空队列的独立验证包中运行：
+
+```sh
+./gradlew -PdeviceTestBuildType=authCheck :app:assembleAuthCheck :app:assembleAuthCheckAndroidTest
+adb install -r app/build/outputs/apk/authCheck/app-authCheck.apk
+adb install -r app/build/outputs/apk/androidTest/authCheck/app-authCheck-androidTest.apk
+adb shell am instrument -w -r -e class com.cruisetune.player.PlaybackOrderDeviceTest \
+  com.cruisetune.player.authcheck.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+测试验证按钮位于歌词与离线入口之间、空队列禁用、切换期间防重复点击、随机选中态、返回顺序后的队列恢复、暂停时精确保留进度和播放中保留当前歌曲及播放意图；还检查队列排序会同步按钮状态，设置中已没有随机播放或循环方式入口。仅使用合成音频，不申请音频焦点、不使用真实网盘账号，测试结束清理自身数据；成功标准为 `OK (1 test)`。合成截图仅保存在验证包的外部文件目录，不纳入源码。
+
+验证结果：179 项主机测试、lintDebug 和独立验证包构建通过。BlueStacks Android 7.1.1 的普通横屏、640×360 与 360×640 dp／1.6 倍字体下，快捷按钮回归分别报告 `OK (1 test)`，并断言三个操作文字完整、点击区域至少 48 dp；原有队列跟随与切歌元数据归属回归也通过。已按 apple-design 核对状态反馈与横屏实屏布局，测试后恢复原分辨率和字体大小；未改动正式版曲库或原始音频。
+
+v0.5.18 发布前复验：179 项 Android 主机测试、15 项发布工具测试、8 项连接服务测试、release lint 和本地构建通过；该版本独立验证包的快捷按钮、队列跟随及切歌元数据归属回归分别报告 `OK (1 test)`。release 包未包含合成音频，源码与文档通过隐私检查。

@@ -77,6 +77,7 @@ class MainActivity : CruiseActivity() {
     private val lyricsCache: LyricsCache by viewModels()
     private var activeLyricsKey: String? = null
     private var pendingOffline: String? = null
+    private var switchingOrder = false
     private lateinit var seek: SeekBar
     private lateinit var play: TouchButton
     private lateinit var previous: TouchButton
@@ -103,7 +104,6 @@ class MainActivity : CruiseActivity() {
     private var artworkJob: Job? = null
     private val cacheTrack = MutableStateFlow<Track?>(null)
     private var cacheStatus = TrackCacheStatus(null, "")
-    private var modeSetting: TextView? = null
     private data class PanelViews(val heading: TextView, val scroll: ScrollView, val content: LinearLayout)
     private val panels = java.util.WeakHashMap<AlertDialog, PanelViews>()
     private var settingsDialog: AlertDialog? = null
@@ -277,7 +277,7 @@ class MainActivity : CruiseActivity() {
         elapsed=Design.label(this,"0:00",if(compact)16f else 18f,Design.secondary)
         duration=Design.label(this,"—",if(compact)16f else 18f,Design.secondary).apply{gravity=Gravity.END}
         times.addView(elapsed,LinearLayout.LayoutParams(0,-2,1f));times.addView(duration,LinearLayout.LayoutParams(0,-2,1f));now.addView(times)
-        details = if(spec.inlineDetails && !detailsExpanded) TrackDetailsView(this,::toggleLyrics,::keepCurrentOffline).also {
+        details = if(spec.inlineDetails && !detailsExpanded) TrackDetailsView(this,::toggleLyrics,::keepCurrentOffline,::togglePlaybackOrder).also {
             now.addView(it,LinearLayout.LayoutParams(-1,if(spec.landscape)0 else dp(240),if(spec.landscape)1f else 0f).apply { topMargin=dp(8) })
         } else null
         val playbackColumn = if(spec.landscape) LinearLayout(this).apply {
@@ -312,7 +312,7 @@ class MainActivity : CruiseActivity() {
         frame.addView(empty,FrameLayout.LayoutParams(-1,-1))
         if(detailsExpanded) {
             lists.background=Design.surface(Design.panel,dp(24).toFloat());lists.setPadding(dp(12),dp(12),dp(12),dp(12))
-            details=TrackDetailsView(this,::toggleLyrics,::keepCurrentOffline).also { lists.addView(it,LinearLayout.LayoutParams(-1,0,1f)) }
+            details=TrackDetailsView(this,::toggleLyrics,::keepCurrentOffline,::togglePlaybackOrder).also { lists.addView(it,LinearLayout.LayoutParams(-1,0,1f)) }
         } else lists.addView(frame,LinearLayout.LayoutParams(-1,0,1f))
         body.addView(lists,if(spec.landscape)LinearLayout.LayoutParams(0,-1,1.15f)else LinearLayout.LayoutParams(-1,0,1f))
         root.addView(body,LinearLayout.LayoutParams(-1,0,1f).apply{topMargin=dp(8)})
@@ -472,7 +472,6 @@ class MainActivity : CruiseActivity() {
         updatePlaybackAction(playAction)
         previous.isEnabled = c.mediaItemCount > 0
         next.isEnabled = c.hasNextMediaItem()
-        modeSetting?.updateText("播放顺序：${PlaybackModes.label(c.repeatMode)}")
         banner.updateText(c.sessionExtras.getString("error") ?: when {
             c.playerError != null -> readableError(c.playerError?.cause ?: c.playerError!!)
             c.playWhenReady && c.playbackState == Player.STATE_BUFFERING -> "正在缓冲"
@@ -496,6 +495,25 @@ class MainActivity : CruiseActivity() {
             it.showArtwork(track?.id,artworkBitmap)
             it.update(metadata?.artist?.toString(),metadata?.albumTitle?.toString(),showingLyrics,state,
                 displayedPosition(),track != null,offline,cacheStatus.text)
+            it.updateOrder(c?.sessionExtras?.getBoolean("shuffled")==true,(c?.mediaItemCount ?: 0)>0,switchingOrder)
+        }
+    }
+    private fun togglePlaybackOrder() {
+        val c=controller ?: return
+        if(switchingOrder || c.mediaItemCount==0)return
+        switchingOrder=true;renderDetails()
+        try {
+            val result=c.sendCustomCommand(SessionCommand(PlaybackService.SHUFFLE,Bundle.EMPTY),Bundle.EMPTY)
+            result.addListener({
+                switchingOrder=false
+                if(!isDestroyed) {
+                    val succeeded=runCatching { result.get().resultCode==androidx.media3.session.SessionResult.RESULT_SUCCESS }.getOrDefault(false)
+                    if(!succeeded)toast("播放顺序暂时无法切换，请重试")
+                    renderPlayer();renderList()
+                }
+            },ContextCompat.getMainExecutor(this))
+        } catch (_: Exception) {
+            switchingOrder=false;renderDetails();toast("播放顺序暂时无法切换，请重试")
         }
     }
     private fun currentMetadata() = app.playbackMetadata.value.forTrack(controller?.currentMediaItem?.mediaId)
@@ -858,7 +876,7 @@ class MainActivity : CruiseActivity() {
         val (dialog,content)=panel("设置")
         settingsDialog=dialog
         populateSettings(dialog,content)
-        dialog.setOnDismissListener { if(settingsDialog===dialog) {settingsDialog=null;modeSetting=null} }
+        dialog.setOnDismissListener { if(settingsDialog===dialog)settingsDialog=null }
         showPanel(dialog)
         panels[dialog]?.scroll?.apply { id=R.id.settings_scroll;post { scrollTo(0,scrollY) } }
     }
@@ -867,8 +885,6 @@ class MainActivity : CruiseActivity() {
         action(content,"封面与歌词") { dialog.dismiss();showTrackDetails() }
         toggle(content, "打开应用时继续播放", "resumeOnOpen", false)
         paragraph(content, "熄屏时自动暂停并保存进度，亮屏后点击继续播放。")
-        action(content, "${if (controller?.sessionExtras?.getBoolean("shuffled") == true) "关闭" else "开启"}随机播放") { command(PlaybackService.SHUFFLE); dialog.dismiss() }
-        modeSetting = action(content,"播放顺序：${PlaybackModes.label(controller?.repeatMode ?: Player.REPEAT_MODE_OFF)}") { showRepeatModePicker() }
         section(content,"缓存与离线")
         toggle(content, "自动缓存后 3 首", "prefetchNextTracks", true)
         paragraph(content, "按播放顺序缓存后 3 首完整歌曲，所有网络均可使用；网络中断后持续重试。")

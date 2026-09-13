@@ -9,6 +9,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.ScrollView
+import androidx.core.view.ViewCompat
 import androidx.core.view.animation.PathInterpolatorCompat
 import com.cruisetune.player.R
 import com.cruisetune.player.core.OfflineState
@@ -51,7 +52,7 @@ internal class ArtworkSwitcher(context: Context) : FrameLayout(context) {
     }
 }
 
-internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keepOffline: () -> Unit) : LinearLayout(context) {
+internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keepOffline: () -> Unit, toggleOrder: () -> Unit = {}) : LinearLayout(context) {
     private val artwork = ArtworkSwitcher(context).apply { id = R.id.player_artwork }
     private val lyrics = object:LinearLayout(context) {
         override fun onMeasure(widthMeasureSpec:Int,heightMeasureSpec:Int) {
@@ -95,6 +96,10 @@ internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keep
         id=R.id.player_offline;textSize=18f;minHeight=context.dp(48);setPadding(context.dp(8),context.dp(6),context.dp(8),context.dp(6))
         isEnabled=false;setOnClickListener { keepOffline() }
     }
+    private val order = TouchButton(context, "顺序").apply {
+        id=R.id.player_order_toggle;textSize=18f;minHeight=context.dp(48);setPadding(context.dp(8),context.dp(6),context.dp(8),context.dp(6))
+        isEnabled=false;maxLines=1;setOnClickListener { toggleOrder() }
+    }
 
     init {
         orientation=VERTICAL;id=R.id.player_details
@@ -111,11 +116,25 @@ internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keep
         addView(metadata,LayoutParams(-1,-2).apply { topMargin=context.dp(8);bottomMargin=context.dp(4) })
         val actions=LinearLayout(context)
         actions.addView(mode,LayoutParams(0,-2,1f))
-        actions.addView(offline,LayoutParams(0,-2,1f).apply { marginStart=context.dp(8) })
+        actions.addView(order,LayoutParams(0,-2,1f).apply { marginStart=context.dp(8) })
+        actions.addView(offline,LayoutParams(0,-2,if(resources.configuration.fontScale>1.3f)1.8f else 1f).apply { marginStart=context.dp(8) })
         addView(actions,LayoutParams(-1,-2))
     }
 
     fun showArtwork(track: String?, bitmap: Bitmap?) = artwork.show(track, bitmap)
+
+    fun updateOrder(shuffled: Boolean, available: Boolean, switching: Boolean = false) {
+        order.setTextIfChanged(if(switching)"切换" else if(shuffled)"随机" else "顺序")
+        order.selectedState(shuffled)
+        order.isEnabled=available && !switching
+        order.contentDescription=when {
+            switching -> "正在切换播放顺序"
+            !available -> "播放顺序，队列为空或播放器未连接"
+            shuffled -> "当前随机播放，点击切换为顺序播放"
+            else -> "当前顺序播放，点击切换为随机播放"
+        }
+        ViewCompat.setStateDescription(order,if(switching)"切换中" else if(shuffled)"随机播放" else "顺序播放")
+    }
 
     fun update(artist: String?, album: String?, showingLyrics: Boolean, state: LyricsState,
         positionMs: Long, hasTrack: Boolean, offlineState: OfflineState, storageDescription: String) {
