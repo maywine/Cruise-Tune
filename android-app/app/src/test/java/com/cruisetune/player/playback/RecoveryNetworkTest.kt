@@ -19,6 +19,7 @@ import java.time.Duration
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.Job
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.*
@@ -28,10 +29,13 @@ import org.robolectric.shadows.ShadowStatFs
 import org.robolectric.util.ReflectionHelpers
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [33], application = CruiseApplication::class)
+@Config(sdk = [28, 33], application = CruiseApplication::class)
 @androidx.media3.common.util.UnstableApi
 class RecoveryNetworkTest {
     private val app get() = RuntimeEnvironment.getApplication() as CruiseApplication
+    @Before fun grantSamePackageReceiverPermission() {
+        shadowOf(app).grantPermissions(app.packageName + ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION")
+    }
     private val audio = ByteBuffer.allocate(44 + 8000 * 2 * 8).order(ByteOrder.LITTLE_ENDIAN).apply {
         put("RIFF".toByteArray()); putInt(capacity() - 8); put("WAVEfmt ".toByteArray())
         putInt(16); putShort(1); putShort(1); putInt(8000); putInt(16000); putShort(2); putShort(16)

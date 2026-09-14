@@ -56,6 +56,7 @@ class PlaybackService : MediaLibraryService() {
     private var capacityMessage: String? = null
     private var prefetchGate = "未调度"
     private val recoveryPolicy = PlaybackRecoveryPolicy()
+    private val stallTracker = PlaybackStallTracker()
     private data class Recovery(val track: Track, val bypass: MediaCache.Bypass, val position: Long,
         var rebuilding: Boolean = false, var networkFailures: Int = 0)
     private var recovery: Recovery? = null
@@ -151,6 +152,7 @@ class PlaybackService : MediaLibraryService() {
             while (isActive) {
                 delay(2000)
                 screenOff.checkNow()
+                checkPlaybackStall()
                 checkRecoveryProgress()
                 if (player.isPlaying) persist()
                 if (!app.media.hasRoom) {
@@ -188,6 +190,7 @@ class PlaybackService : MediaLibraryService() {
     }
     private fun cancelRecovery() {
         recoveryGeneration++
+        stallTracker.reset()
         recoveryAction?.cancel(); recoveryAction = null
         recoveryRepair?.cancel(); recoveryRepair = null
         recovery?.let { app.media.endBypass(it.bypass) }
@@ -230,10 +233,28 @@ class PlaybackService : MediaLibraryService() {
         if (attempt != null && NetworkRetry.isTransient(error)) {
             retryRecoveryNetworkFailure(error, attempt); return
         }
-        if (!PlaybackRecoveryPolicy.isFileFailure(error)) {
+        val stalled = PlaybackRecoveryPolicy.isProgressFailure(error)
+        if (!PlaybackRecoveryPolicy.isFileFailure(error) && !(stalled && attempt == null && canRecoverStalledCache(track))) {
             cancelRecovery(); updateExtras(readableError(error.cause ?: error)); return
         }
+        scheduleRecovery(track, error, stalled)
+    }
+    private fun canRecoverStalledCache(track: Track) = app.media.canRepairStreaming(track) && app.media.hasCompleteStreamingCache(track)
+    private fun checkPlaybackStall() {
+        val track = entries.getOrNull(player.currentMediaItemIndex)?.track
+        val active = ready.isCompleted && !applying && !automaticPlaybackChange && player.playerError == null &&
+            player.playWhenReady && !screenOff.isScreenOff() && player.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_NONE &&
+            player.playbackState in listOf(Player.STATE_READY, Player.STATE_BUFFERING)
+        // Only the initial cached playback can trigger a probe. Its uncached network load may
+        // legitimately wait; neither that wait nor state flapping proves the file is broken.
+        val eligible = active && track != null && recovery == null && canRecoverStalledCache(track)
+        if (stallTracker.update(track?.cacheKey, player.currentPosition, eligible, android.os.SystemClock.elapsedRealtime())) {
+            scheduleRecovery(checkNotNull(track), null, stalled = true)
+        }
+    }
+    private fun scheduleRecovery(track: Track, error: PlaybackException?, stalled: Boolean) {
         val generation = recoveryGeneration
+        val position = player.currentPosition
         recoveryAction?.cancel()
         recoveryAction = scope.launch {
             try {
@@ -241,18 +262,25 @@ class PlaybackService : MediaLibraryService() {
             yield()
             commandLock.withLock {
                 if (generation != recoveryGeneration || player.currentMediaItem?.mediaId != track.id ||
-                    player.playerError !== error || !player.playWhenReady || screenOff.isScreenOff()) return@withLock
+                    player.playerError !== error || !player.playWhenReady || screenOff.isScreenOff() ||
+                    player.playbackSuppressionReason != Player.PLAYBACK_SUPPRESSION_REASON_NONE) return@withLock
+                if (stalled && player.currentPosition - position >= 250) { stallTracker.reset(); return@withLock }
                 val canRepair = app.media.canRepairStreaming(track)
+                if (stalled && (recovery != null || !canRecoverStalledCache(track))) { stallTracker.reset(); return@withLock }
                 if (canRepair && recovery == null && recoveryPolicy.tryRecovery(track.cacheKey)) {
                     cancelPrefetch()
+                    stallTracker.reset()
                     val attempt = Recovery(track, app.media.beginBypass(track), player.currentPosition.coerceAtLeast(0))
                     recovery = attempt
-                    recoveryNotice = "缓存读取异常，正在重新读取（1/1）"
+                    recoveryNotice = if (stalled) "播放进度未前进，正在重新读取（1/1）" else "缓存读取异常，正在重新读取（1/1）"
                     automaticPlaybackChange = true
                     try { prepareAndPlay(restartCurrent = true) } finally { automaticPlaybackChange = false }
                     updateExtras()
-                } else {
+                } else if (!stalled) {
                     skipFailedTrack(track)
+                } else {
+                    cancelRecovery(); player.pause(); player.stop(); persistedIntent = false; persist()
+                    recoveryNotice = "播放未能恢复，请手动重试或切换歌曲"; updateExtras()
                 }
             }
             } catch (e: CancellationException) { throw e }
@@ -263,6 +291,7 @@ class PlaybackService : MediaLibraryService() {
         }
     }
     private fun skipFailedTrack(track: Track) {
+        stallTracker.reset()
         recovery?.let { app.media.endBypass(it.bypass) }; recovery = null
         recoveryRepair?.cancel(); recoveryRepair = null
         recoveryPolicy.failed(track.cacheKey)

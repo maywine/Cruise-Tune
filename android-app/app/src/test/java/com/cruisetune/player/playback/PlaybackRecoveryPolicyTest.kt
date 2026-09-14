@@ -2,6 +2,7 @@ package com.cruisetune.player.playback
 
 import android.app.Application
 import androidx.media3.common.ParserException
+import androidx.media3.common.util.StuckPlayerException
 import com.cruisetune.player.core.UserError
 import java.io.EOFException
 import java.io.IOException
@@ -52,5 +53,15 @@ class PlaybackRecoveryPolicyTest {
         }
         assertTrue(PlaybackRecoveryPolicy.isFileFailure(IOException(EOFException())))
         assertTrue(PlaybackRecoveryPolicy.isFileFailure(ParserException.createForMalformedContainer("Broken header", null)))
+    }
+    @Test fun progressTimeoutsAreRecognizedWithoutCallingThemFileCorruption() {
+        for (type in listOf(StuckPlayerException.STUCK_PLAYING_NO_PROGRESS, StuckPlayerException.STUCK_BUFFERING_NO_PROGRESS,
+            StuckPlayerException.STUCK_BUFFERING_NOT_LOADING)) {
+            val error = StuckPlayerException(type, 10000)
+            assertTrue(PlaybackRecoveryPolicy.isProgressFailure(error))
+            assertFalse(PlaybackRecoveryPolicy.isFileFailure(error))
+        }
+        assertFalse(PlaybackRecoveryPolicy.isProgressFailure(StuckPlayerException(StuckPlayerException.STUCK_SUPPRESSED, 10000)))
+        assertFalse(PlaybackRecoveryPolicy.isProgressFailure(SocketTimeoutException()))
     }
 }

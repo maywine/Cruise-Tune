@@ -11,6 +11,7 @@ import com.cruisetune.player.CruiseApplication
 import com.cruisetune.player.core.*
 import java.io.EOFException
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -21,10 +22,13 @@ import org.robolectric.annotation.Config
 import org.robolectric.util.ReflectionHelpers
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [33], application = CruiseApplication::class)
+@Config(sdk = [28, 33], application = CruiseApplication::class)
 @androidx.media3.common.util.UnstableApi
 class PlaybackRecoveryServiceTest {
     private val app get() = RuntimeEnvironment.getApplication() as CruiseApplication
+    @Before fun grantSamePackageReceiverPermission() {
+        shadowOf(app).grantPermissions(app.packageName + ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION")
+    }
     private fun await(message: String, diagnostic: () -> String = { "" }, condition: () -> Boolean) {
         val deadline = System.nanoTime() + 10_000_000_000L
         while (System.nanoTime() < deadline) {

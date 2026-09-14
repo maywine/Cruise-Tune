@@ -64,6 +64,10 @@ class MediaCache(private val app: CruiseApplication) {
     } }
     internal fun isBypassed(key: String?) = key != null && bypasses.containsKey(key)
     internal fun canRepairStreaming(track: Track) = track.localUri.isBlank() && track.cacheKey in streamReads && track.cacheKey !in offlineReads
+    internal fun hasCompleteStreamingCache(track: Track): Boolean {
+        val length = contentLength(track)
+        return length > 0 && stream.isCached(track.cacheKey, 0, length)
+    }
     internal fun beginBypass(track: Track) = Bypass(track.cacheKey).also { bypasses[it.key] = it }
     internal fun endBypass(bypass: Bypass) { bypasses.remove(bypass.key, bypass) }
     internal suspend fun repairStreaming(track: Track, bypass: Bypass) {
