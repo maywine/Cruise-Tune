@@ -57,7 +57,7 @@ class PlaybackService : MediaLibraryService() {
     private var prefetchGate = "未调度"
     private val recoveryPolicy = PlaybackRecoveryPolicy()
     private data class Recovery(val track: Track, val bypass: MediaCache.Bypass, val position: Long,
-        val started: Long = android.os.SystemClock.elapsedRealtime(), var rebuilding: Boolean = false)
+        var rebuilding: Boolean = false, var networkFailures: Int = 0)
     private var recovery: Recovery? = null
     private var recoveryAction: Job? = null
     private var recoveryRepair: Job? = null
@@ -73,7 +73,7 @@ class PlaybackService : MediaLibraryService() {
     override fun onCreate() {
         super.onCreate()
         player = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(app.media.playbackFactory).setLoadErrorHandlingPolicy(PersistentNetworkLoadPolicy(app.media::isBypassed)))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(app.media.playbackFactory).setLoadErrorHandlingPolicy(PersistentNetworkLoadPolicy()))
             .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(20000, 60000, 1500, 3500).build())
             .build().apply {
                 setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
@@ -193,16 +193,44 @@ class PlaybackService : MediaLibraryService() {
         recovery?.let { app.media.endBypass(it.bypass) }
         recovery = null; recoveryNotice = null; clearRecoveryNoticeOnProgress = false
     }
-    private fun hasNetwork(): Boolean {
-        val manager = getSystemService(android.net.ConnectivityManager::class.java) ?: return false
-        return manager.getNetworkCapabilities(manager.activeNetwork)?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+    private fun retryRecoveryNetworkFailure(error: PlaybackException, attempt: Recovery) {
+        val generation = recoveryGeneration
+        attempt.networkFailures = (attempt.networkFailures + 1).coerceAtMost(5)
+        recoveryAction?.cancel()
+        recoveryNotice = "正在缓冲"; updateExtras()
+        // Normally the load policy retains transient failures. Also handle a transient error
+        // surfaced by the player without clearing the bypass or consuming a file-failure budget.
+        recoveryAction = scope.launch {
+            try {
+                delay(NetworkRetry.delayMs(attempt.networkFailures))
+                commandLock.withLock {
+                    if (generation != recoveryGeneration || player.currentMediaItem?.mediaId != attempt.track.id ||
+                        player.playerError !== error || !player.playWhenReady || screenOff.isScreenOff()) return@withLock
+                    automaticPlaybackChange = true
+                    try { prepareAndPlay(restartCurrent = true) } finally { automaticPlaybackChange = false }
+                    updateExtras()
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) {
+                if (generation == recoveryGeneration) {
+                    cancelRecovery(); player.pause(); persistedIntent = false
+                    updateExtras("自动恢复未完成，请手动重试")
+                }
+            } finally {
+                if (recoveryAction === coroutineContext[Job]) recoveryAction = null
+            }
+        }
     }
     private fun handlePlaybackFailure(error: PlaybackException) {
         updateExtras(readableError(error.cause ?: error))
         val track = entries.getOrNull(player.currentMediaItemIndex)?.track ?: return
         if (!ready.isCompleted || !player.playWhenReady || screenOff.isScreenOff() ||
             player.playbackSuppressionReason != Player.PLAYBACK_SUPPRESSION_REASON_NONE) return
-        if (PlaybackRecoveryPolicy.isSharedFailure(error) || (recovery == null && !PlaybackRecoveryPolicy.isFileFailure(error))) {
+        val attempt = recovery
+        if (attempt != null && NetworkRetry.isTransient(error)) {
+            retryRecoveryNetworkFailure(error, attempt); return
+        }
+        if (!PlaybackRecoveryPolicy.isFileFailure(error)) {
             cancelRecovery(); updateExtras(readableError(error.cause ?: error)); return
         }
         val generation = recoveryGeneration
@@ -215,9 +243,6 @@ class PlaybackService : MediaLibraryService() {
                 if (generation != recoveryGeneration || player.currentMediaItem?.mediaId != track.id ||
                     player.playerError !== error || !player.playWhenReady || screenOff.isScreenOff()) return@withLock
                 val canRepair = app.media.canRepairStreaming(track)
-                if (canRepair && recovery == null && !hasNetwork()) {
-                    recoveryNotice = "当前歌曲读取失败，联网后可重试"; updateExtras(); return@withLock
-                }
                 if (canRepair && recovery == null && recoveryPolicy.tryRecovery(track.cacheKey)) {
                     cancelPrefetch()
                     val attempt = Recovery(track, app.media.beginBypass(track), player.currentPosition.coerceAtLeast(0))
@@ -267,16 +292,8 @@ class PlaybackService : MediaLibraryService() {
         if (player.currentMediaItem?.mediaId != attempt.track.id || !player.playWhenReady || screenOff.isScreenOff()) {
             cancelRecovery(); updateExtras(); return
         }
-        if (!attempt.rebuilding && android.os.SystemClock.elapsedRealtime() - attempt.started >= 45000 &&
-            player.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_NONE &&
-            (!player.isPlaying || player.currentPosition < attempt.position + 1500)) {
-            if (hasNetwork()) skipFailedTrack(attempt.track)
-            else {
-                cancelRecovery(); player.stop()
-                recoveryNotice = "网络不可用，请联网后重试"; updateExtras()
-            }
-            return
-        }
+        // Elapsed time and connectivity capabilities are not evidence of a broken file.
+        // Keep the current load (and its network retries) until progress, a file error or user action.
         if (attempt.rebuilding || !player.isPlaying || player.currentPosition < attempt.position + 1500) return
         attempt.rebuilding = true
         recoveryNotice = "已恢复播放，正在重建当前歌曲缓存"; updateExtras()

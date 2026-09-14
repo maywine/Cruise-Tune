@@ -55,12 +55,14 @@ class PersistentNetworkLoadPolicyTest {
         assertTrue(NetworkRetry.isTransient(error))
         assertEquals(30000L, PersistentNetworkLoadPolicy().getRetryDelayMsFor(info(error, 1000000)))
     }
-    @Test fun recoveryLoadIsBoundedWithoutChangingNormalWeakNetworkRetries() {
-        val policy = PersistentNetworkLoadPolicy { it == "recovering" }
-        fun failure(key: String) = LoadErrorHandlingPolicy.LoadErrorInfo(
+    @Test fun recoveryAndNormalLoadsKeepRetryingTransientFailuresWithoutAnAttemptCutoff() {
+        val policy = PersistentNetworkLoadPolicy()
+        fun failure(key: String, count: Int) = LoadErrorHandlingPolicy.LoadErrorInfo(
             LoadEventInfo(1,DataSpec.Builder().setUri("https://music.test/song").setKey(key).build(),0),
-            MediaLoadData(C.DATA_TYPE_MEDIA),SocketTimeoutException(),1)
-        assertEquals(C.TIME_UNSET, policy.getRetryDelayMsFor(failure("recovering")))
-        assertEquals(2000L, policy.getRetryDelayMsFor(failure("normal")))
+            MediaLoadData(C.DATA_TYPE_MEDIA),SocketTimeoutException(),count)
+        for (key in listOf("recovering", "normal")) {
+            assertEquals(2000L, policy.getRetryDelayMsFor(failure(key, 1)))
+            assertEquals(30000L, policy.getRetryDelayMsFor(failure(key, 1000000)))
+        }
     }
 }

@@ -31,9 +31,10 @@ object NetworkRetry {
 
 /** Keep a network-interrupted playback load alive until connectivity returns or the user stops it. */
 @UnstableApi
-class PersistentNetworkLoadPolicy(private val isRecoveryLoad: (String?) -> Boolean = { false }) : DefaultLoadErrorHandlingPolicy() {
+class PersistentNetworkLoadPolicy : DefaultLoadErrorHandlingPolicy() {
     override fun getMinimumLoadableRetryCount(dataType: Int): Int = Int.MAX_VALUE
     override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long =
-        if (!isRecoveryLoad(loadErrorInfo.loadEventInfo.dataSpec.key) && NetworkRetry.isTransient(loadErrorInfo.exception))
+        // Bypassing suspect cached bytes does not change the network's retry policy.
+        if (NetworkRetry.isTransient(loadErrorInfo.exception))
             NetworkRetry.delayMs(loadErrorInfo.errorCount) else C.TIME_UNSET
 }
