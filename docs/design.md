@@ -8,19 +8,21 @@
 
 依据 Apple 风格设计中的清晰、克制、反馈和空间一致性原则，不复制网页平台机制到 Android。高频按钮和模态弹窗不额外缩放或播放入退场动画；触下即时反馈，松开或取消恢复，减少动态效果覆盖开关与页面切换。
 
-## 0.5.2 图标
+## 启动图标：Ocean / Ivory
 
 ![图标预览](assets/icon/icon-presentation.png)
 
-深石墨色背景、香槟金 C 形唱片弧线与圆角播放符号。光学位移平衡 C 形左侧的视觉重量。图标保持静态；启动器自身的交互效果由系统决定。
+最终选定蓝绿渐变背景、暖白 C 形唱片弧线与圆角播放三角。背景由 `#178A91` 过渡到 `#155068`；C 形弧线由 `#F8F6EC` 过渡到 `#DAEFE9`，播放符号由 `#FFFDF5` 过渡到 `#EDF7F2`。保留原标志的几何：8dp 圆头弧线及 4dp 向右的光学位移。
 
-API 23–25 提供多密度 PNG，API 26 起提供前景／背景矢量自适应图标，API 33 起提供单色层。预览中的主题色只是演示。图层遵循 [Android 自适应图标规范](https://developer.android.com/develop/ui/compose/system/icon_design_adaptive)，实际外轮廓由启动器裁切。
+API 23–25 提供五档 PNG，API 26 起使用前景／背景矢量自适应图标，API 33 起提供相同几何的单色层。预览中的主题色仅作演示，实际颜色与外轮廓由启动器决定。图层遵循 [Android 自适应图标规范](https://developer.android.com/develop/ui/compose/system/icon_design_adaptive)。
 
-所有资源与预览由同一几何定义生成。需要 Node.js 与 sharp：
+图标保持静态，启动器自身负责交互效果。生成器使用同一份几何和配色生成应用资源及预览，避免不同分辨率或图层使用不同方案。
+
+需要 Node.js 与 sharp：
 
 ```sh
 npm ci
 npm run generate:icon
 ```
 
-生成器位于 `tools/generate-launcher-icon.cjs`，更新应用图标资源和本目录中的预览。预览不含个人账号、二维码或模拟器截图。
+生成器位于 `tools/generate-launcher-icon.cjs`。已核对圆角／圆形及单色预览，48、72、96、144、192px 位图尺寸，以及 Android 资源编译。预览不含个人账号、二维码或模拟器截图。

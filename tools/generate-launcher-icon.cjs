@@ -8,16 +8,24 @@ const res = path.join(root, 'android-app/app/src/main/res');
 const out = path.join(root, 'docs/assets/icon');
 const arc = 'M69.678,36.322 A25,25 0,1 0,69.678,71.678';
 const play = 'M49,42.8 C49,40.9 51.05,39.72 52.7,40.67 L72.1,51.87 C73.73,52.81 73.73,55.19 72.1,56.13 L52.7,67.33 C51.05,68.28 49,67.1 49,65.2 Z';
+// Shared colors keep adaptive vectors and bitmap exports aligned.
+const palette = {
+  background: ['#178A91', '#155068'],
+  ring: ['#F8F6EC', '#DAEFE9'],
+  play: ['#FFFDF5', '#EDF7F2'],
+  themedBackground: '#DDEDEA',
+  themedMark: '#264E50',
+};
 const xmlStart = '<vector xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">';
 function write(file, content) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content); }
 const gradient = (attribute, start, end, color1, color2) => `<aapt:attr name="android:${attribute}"><gradient android:type="linear" android:startX="${start[0]}" android:startY="${start[1]}" android:endX="${end[0]}" android:endY="${end[1]}" android:startColor="${color1}" android:endColor="${color2}" /></aapt:attr>`;
 const foreground = `${xmlStart}
     <group android:translateX="4">
     <path android:pathData="${arc}" android:fillColor="@android:color/transparent" android:strokeWidth="8" android:strokeLineCap="round">
-        ${gradient('strokeColor', [27,29],[71,81], '#F0D6A6','#B78B4F')}
+        ${gradient('strokeColor', [27,29],[71,81], ...palette.ring)}
     </path>
     <path android:pathData="${play}">
-        ${gradient('fillColor',[49,40],[72,68],'#FFF0D4','#E0BA7C')}
+        ${gradient('fillColor',[49,40],[72,68],...palette.play)}
     </path>
     </group>
 </vector>\n`;
@@ -29,7 +37,7 @@ const monochrome = `${xmlStart}
 </vector>\n`;
 const background = `${xmlStart}
     <path android:pathData="M0,0H108V108H0Z">
-        ${gradient('fillColor',[12,0],[87,108],'#293239','#10151A')}
+        ${gradient('fillColor',[12,0],[87,108],...palette.background)}
     </path>
 </vector>\n`;
 // AdaptiveIconDrawable exists on API 26+, where vector gradients are supported.
@@ -41,16 +49,16 @@ write(path.join(res,'mipmap-anydpi-v26/ic_launcher.xml'),adaptive(false));
 write(path.join(res,'mipmap-anydpi-v33/ic_launcher.xml'),adaptive(true));
 
 const defs = `<defs>
- <linearGradient id="bg" gradientUnits="userSpaceOnUse" x1="12" y1="0" x2="87" y2="108"><stop stop-color="#293239"/><stop offset="1" stop-color="#10151A"/></linearGradient>
- <linearGradient id="ring" gradientUnits="userSpaceOnUse" x1="27" y1="29" x2="71" y2="81"><stop stop-color="#F0D6A6"/><stop offset="1" stop-color="#B78B4F"/></linearGradient>
- <linearGradient id="play" gradientUnits="userSpaceOnUse" x1="49" y1="40" x2="72" y2="68"><stop stop-color="#FFF0D4"/><stop offset="1" stop-color="#E0BA7C"/></linearGradient>
+ <linearGradient id="bg" gradientUnits="userSpaceOnUse" x1="12" y1="0" x2="87" y2="108"><stop stop-color="${palette.background[0]}"/><stop offset="1" stop-color="${palette.background[1]}"/></linearGradient>
+ <linearGradient id="ring" gradientUnits="userSpaceOnUse" x1="27" y1="29" x2="71" y2="81"><stop stop-color="${palette.ring[0]}"/><stop offset="1" stop-color="${palette.ring[1]}"/></linearGradient>
+ <linearGradient id="play" gradientUnits="userSpaceOnUse" x1="49" y1="40" x2="72" y2="68"><stop stop-color="${palette.play[0]}"/><stop offset="1" stop-color="${palette.play[1]}"/></linearGradient>
  </defs>`;
 // The open C carries more ink on its left; a 4dp shift optically centers the mark.
-const mark = mono => `<g transform="translate(4 0)"><path d="${arc}" fill="none" stroke="${mono ? '#424B3E' : 'url(#ring)'}" stroke-width="8" stroke-linecap="round"/><path d="${play}" fill="${mono ? '#424B3E' : 'url(#play)'}"/></g>`;
+const mark = mono => `<g transform="translate(4 0)"><path d="${arc}" fill="none" stroke="${mono ? palette.themedMark : 'url(#ring)'}" stroke-width="8" stroke-linecap="round"/><path d="${play}" fill="${mono ? palette.themedMark : 'url(#play)'}"/></g>`;
 function svg(mask='rounded', mono=false, size=1024) {
   // 72dp is the adaptive icon's resting viewport within the 108dp layers.
   const shape = mask === 'circle' ? '<circle cx="54" cy="54" r="36"/>' : '<rect x="18" y="18" width="72" height="72" rx="16"/>';
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="18 18 72 72">${defs}<defs><clipPath id="mask">${shape}</clipPath></defs><g clip-path="url(#mask)"><rect width="108" height="108" fill="${mono ? '#DCE5D5' : 'url(#bg)'}"/>${mark(mono)}</g></svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="18 18 72 72">${defs}<defs><clipPath id="mask">${shape}</clipPath></defs><g clip-path="url(#mask)"><rect width="108" height="108" fill="${mono ? palette.themedBackground : 'url(#bg)'}"/>${mark(mono)}</g></svg>`;
 }
 async function main() {
   fs.mkdirSync(out,{recursive:true});
@@ -66,7 +74,7 @@ async function main() {
   // Contact sheet is a presentation artifact, never included in the application.
   const tile = async (mask, mono, size) => sharp(Buffer.from(svg(mask,mono,size))).png().toBuffer();
   const label=(text,x,y,size=18,color='#737A81')=>`<text x="${x}" y="${y}" font-family="Arial, sans-serif" font-size="${size}" fill="${color}">${text}</text>`;
-  const board=`<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="780"><rect width="1280" height="780" fill="#F5F3EF"/>${label('CRUISE TUNE',68,69,18,'#8B744C')}${label('Launcher icon',68,114,32,'#1B2228')}<line x1="68" y1="150" x2="1212" y2="150" stroke="#DDDED9"/>${label('PRIMARY',68,686,15)}${label('CIRCULAR MASK',665,425,14)}${label('THEMED',940,425,14)}${label('48 PX',665,647,14)}${label('72 PX',800,647,14)}${label('96 PX',957,647,14)}${label('0.5.2  /  Launcher icon',965,735,15)}</svg>`;
+  const board=`<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="780"><rect width="1280" height="780" fill="#F4F5F3"/>${label('CRUISE TUNE',68,69,18,'#1D6C75')}${label('Ocean / Ivory',68,114,32,'#1B3038')}<line x1="68" y1="150" x2="1212" y2="150" stroke="#DBE2DF"/>${label('PRIMARY',68,686,15)}${label('CIRCULAR MASK',665,425,14)}${label('THEMED',940,425,14)}${label('48 PX',665,647,14)}${label('72 PX',800,647,14)}${label('96 PX',957,647,14)}${label('Cruise Tune  /  Launcher icon',921,735,15)}</svg>`;
   await sharp(Buffer.from(board)).composite([
     {input:await tile('rounded',false,440),left:68,top:202},
     {input:await tile('circle',false,176),left:665,top:208},
