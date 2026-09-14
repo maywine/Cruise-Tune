@@ -3,6 +3,7 @@ package com.cruisetune.player.playback
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Looper
+import android.os.Handler
 import android.os.PowerManager
 import androidx.media3.common.*
 import androidx.media3.datasource.*
@@ -17,6 +18,8 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.time.Duration
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Job
 import org.junit.Assert.*
 import org.junit.Before
@@ -42,14 +45,14 @@ class RecoveryNetworkTest {
         put("data".toByteArray()); putInt(capacity() - 44)
     }.array()
 
-    private fun await(message: String, condition: () -> Boolean) {
+    private fun await(message: String, diagnostic: () -> String = { "" }, condition: () -> Boolean) {
         val deadline = System.nanoTime() + 15_000_000_000L
         while (System.nanoTime() < deadline) {
             shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(20))
             if (condition()) return
             Thread.sleep(5)
         }
-        fail(message)
+        fail("$message ${diagnostic()}")
     }
 
     private fun seed(): List<Track> {
@@ -85,6 +88,11 @@ class RecoveryNetworkTest {
         PlaybackService::class.java.getDeclaredMethod(name).apply { isAccessible = true }.invoke(service)
 
     private fun injectRecovery(service: PlaybackService, track: Track) {
+        // A late seek/play acknowledgement contains the real engine state and would overwrite
+        // the synthetic error. Drain those commands before injecting an otherwise terminal state.
+        await("Player commands must settle before injecting recovery") {
+            ReflectionHelpers.getField<Int>(player(service), "pendingOperationAcks") == 0
+        }
         val c = Class.forName("com.cruisetune.player.playback.PlaybackService\$Recovery")
             .getDeclaredConstructor(Track::class.java, MediaCache.Bypass::class.java,
                 Long::class.javaPrimitiveType, Boolean::class.javaPrimitiveType, Int::class.javaPrimitiveType)
@@ -135,18 +143,28 @@ class RecoveryNetworkTest {
         val tracks = seed(); val opens = AtomicInteger()
         ReflectionHelpers.setField(app.media, "network", factory(opens))
         val owner = Robolectric.buildService(PlaybackService::class.java).create(); val service = owner.get(); val player = player(service)
+        val playbackGate = CountDownLatch(1)
         try {
             await("Queue must restore") { player.mediaItemCount == 2 }
             player.setAudioAttributes(player.audioAttributes, false)
+            val entered = CountDownLatch(1)
+            Handler(player.playbackLooper).post { entered.countDown(); playbackGate.await() }
+            assertTrue("Playback thread must reach the command barrier", entered.await(2, TimeUnit.SECONDS))
             player.seekTo(0, 1200); player.play(); shadowOf(Looper.getMainLooper()).idle()
-            injectRecovery(service, tracks[0]); report(service, transportFailure())
+            assertTrue(ReflectionHelpers.getField<Int>(player, "pendingOperationAcks") > 0)
+            Handler(Looper.getMainLooper()).post { playbackGate.countDown() }
+            injectRecovery(service, tracks[0])
+            assertEquals(0, ReflectionHelpers.getField<Int>(player, "pendingOperationAcks"))
+            report(service, transportFailure())
             assertTrue(action(service)?.isActive == true)
             assertTrue(app.media.isBypassed(tracks[0].cacheKey))
-            await("The delayed retry must actually reopen audio") { opens.get() > 0 && player.playbackState == Player.STATE_READY }
+            await("The delayed retry must actually reopen audio", diagnostic = {
+                "opens=${opens.get()}, state=${player.playbackState}, position=${player.currentPosition}, error=${player.playerError?.errorCode}"
+            }) { opens.get() > 0 && player.playbackState == Player.STATE_READY }
             assertEquals(tracks[0].id, player.currentMediaItem?.mediaId)
             assertTrue(player.currentPosition >= 1200)
             assertNull(player.playerError)
-        } finally { owner.destroy() }
+        } finally { playbackGate.countDown(); owner.destroy() }
     }
 
     @Test fun waitingBeyondFortyFiveSecondsNeverSkipsForOfflineUnvalidatedOrValidatedNetworks() {
