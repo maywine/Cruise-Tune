@@ -21,7 +21,8 @@ class LibraryRepository(private val context: Context, val database: LibraryDatab
     private val stateMutable = MutableStateFlow(LibraryState())
     val state = stateMutable.asStateFlow()
     private val scanLock = Mutex()
-    fun quark(accountId: String) = QuarkApi(client, { vault.get(accountId) }, { vault.put(accountId, it) })
+    fun quark(accountId: String) = QuarkApi(client, { vault.get(accountId) }, { vault.put(accountId, it) },
+        cookieLock = vault, cookieRevision = { vault.revision(accountId) })
     suspend fun connectWebSession(value: String, reconnect: String?, id: String) = scanLock.withLock {
         withContext(Dispatchers.IO) {
             val sources = if (reconnect == null) emptyList() else database.sources().filter {

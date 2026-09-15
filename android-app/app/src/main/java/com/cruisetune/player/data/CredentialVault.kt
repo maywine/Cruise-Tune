@@ -37,4 +37,7 @@ class CredentialVault(context: Context) {
         }
     }.getOrNull()
     @Synchronized fun remove(id: String) { check(prefs.edit().remove(id).commit()) { "账号状态更新失败" } }
+    // The encrypted record changes on every successful put, even for identical plaintext.
+    // Callers compare this opaque revision while holding this vault's monitor; never log it.
+    @Synchronized internal fun revision(id: String): String? = prefs.getString(id, null)
 }

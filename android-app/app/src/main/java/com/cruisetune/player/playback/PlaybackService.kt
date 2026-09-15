@@ -64,6 +64,7 @@ class PlaybackService : MediaLibraryService() {
     private var recoveryRepair: Job? = null
     private var recoveryGeneration = 0L
     private var automaticPlaybackChange = false
+    private var prepareAfterManualSeek = false
     private var recoveryNotice: String? = null
     private var clearRecoveryNoticeOnProgress = false
     private val prefetch by lazy { LookAheadPrefetch(scope, app.media::isPrefetchComplete, app.media::prefetchAttempt,
@@ -97,7 +98,16 @@ class PlaybackService : MediaLibraryService() {
         player.addListener(object : Player.Listener {
             override fun onEvents(player: Player, events: Player.Events) {
                 app.playbackMetadata.value=PlaybackMetadata.from(player)
+                val restartSelected = prepareAfterManualSeek && events.contains(Player.EVENT_POSITION_DISCONTINUITY)
+                if (events.contains(Player.EVENT_POSITION_DISCONTINUITY)) prepareAfterManualSeek = false
                 if (applying || !ready.isCompleted) return
+                // A terminal error leaves ExoPlayer IDLE. Seeking changes metadata but does not
+                // restart its loader, even if the next item is fully cached. Prepare after the
+                // seek/transition callbacks have cancelled the old recovery; retain pause intent.
+                if (restartSelected && player.playbackState == Player.STATE_IDLE && !screenOff.isScreenOff()) {
+                    player.prepare()
+                    updateExtras()
+                }
                 if (player.playbackState == Player.STATE_ENDED) persistedIntent = false
                 if (player.playerError == null && (events.contains(Player.EVENT_PLAYER_ERROR) || (events.contains(Player.EVENT_PLAYBACK_STATE_CHANGED) && player.playbackState == Player.STATE_READY))) updateExtras()
                 if (events.containsAny(Player.EVENT_PLAY_WHEN_READY_CHANGED, Player.EVENT_POSITION_DISCONTINUITY, Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_REPEAT_MODE_CHANGED, Player.EVENT_PLAYBACK_STATE_CHANGED)) {
@@ -110,6 +120,8 @@ class PlaybackService : MediaLibraryService() {
             override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
                 if (!automaticPlaybackChange && reason == Player.DISCONTINUITY_REASON_SEEK) {
                     cancelRecovery(); recoveryPolicy.reset()
+                    prepareAfterManualSeek = player.playbackState == Player.STATE_IDLE &&
+                        (player.playerError != null || player.playWhenReady)
                 }
             }
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -329,7 +341,16 @@ class PlaybackService : MediaLibraryService() {
         recoveryRepair = scope.launch {
             try {
                 prefetch.cancelAndJoin()
-                app.media.repairStreaming(attempt.track, attempt.bypass)
+                maybePrefetch()
+                retryCacheRepair(
+                    repair = { app.media.repairStreaming(attempt.track, attempt.bypass) },
+                    onRetry = { error ->
+                        if (recovery === attempt) {
+                            recoveryNotice = if (error is CacheStorageUnavailable) "播放中，等待缓存空间" else "播放中，缓存稍后重试"
+                            updateExtras(); maybePrefetch()
+                        }
+                    },
+                )
                 if (recovery !== attempt) return@launch
                 app.media.endBypass(attempt.bypass); recovery = null
                 recoveryNotice = null; updateExtras(); maybePrefetch()
@@ -338,6 +359,7 @@ class PlaybackService : MediaLibraryService() {
                 if (recovery === attempt) {
                     // The uncached playback can continue even if the background replacement fails.
                     recoveryNotice = "已恢复播放，缓存修复未完成"; updateExtras()
+                    maybePrefetch()
                 }
             }
         }
@@ -418,10 +440,10 @@ class PlaybackService : MediaLibraryService() {
     }
     private fun cancelPrefetch() { prefetch.cancel() }
     private fun maybePrefetch() {
-        if (!ready.isCompleted || applying || recovery != null) return
+        if (!ready.isCompleted || applying || recovery?.rebuilding == false) return
         val wanted = LookAheadPlan.select(entries.map { it.track }, player.currentMediaItemIndex, player.repeatMode, nextIndex = { index ->
             player.currentTimeline.getNextWindowIndex(index, player.repeatMode, player.shuffleModeEnabled)
-        })
+        }).filterNot { it.cacheKey == recovery?.track?.cacheKey }
         // Reserve room for the currently playing file as well as the upcoming files; avoid LRU churn.
         val current = entries.getOrNull(player.currentMediaItemIndex)?.track
         var budget = app.media.streamLimitBytes

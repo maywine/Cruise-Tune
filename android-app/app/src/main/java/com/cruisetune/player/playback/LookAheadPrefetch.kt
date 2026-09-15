@@ -61,11 +61,12 @@ class LookAheadPrefetch(
             val attempts = mutableMapOf<String, Int>()
             val nextAttempt = mutableMapOf<String, Long>()
             val blocked = mutableSetOf<String>()
+            val waitingForSpace = mutableSetOf<String>()
             while (isActive) {
                 for (track in wanted) {
                     ensureActive()
                     val key = track.cacheKey
-                    if (isComplete(track)) { attempts.remove(key); nextAttempt.remove(key); continue }
+                    if (isComplete(track)) { attempts.remove(key); nextAttempt.remove(key); waitingForSpace.remove(key); continue }
                     if (key in blocked || (nextAttempt[key] ?: 0) > now()) continue
                     val attempt = createAttempt(track)
                     active = attempt
@@ -76,15 +77,17 @@ class LookAheadPrefetch(
                             work.await()
                             ensureActive()
                             if (!isComplete(track)) throw com.cruisetune.player.core.UserError("歌曲缓存尚未完整，将继续重试", retryable = true)
-                            attempts.remove(key); nextAttempt.remove(key)
+                            attempts.remove(key); nextAttempt.remove(key); waitingForSpace.remove(key)
                         } catch (e: CancellationException) {
                             attempt.cancel(); work.cancel(); throw e
                         } catch (e: Exception) {
-                            if (NetworkRetry.isTransient(e)) {
+                            if (e is CacheStorageUnavailable || NetworkRetry.isTransient(e)) {
+                                if (e is CacheStorageUnavailable) waitingForSpace += key else waitingForSpace -= key
                                 val count = ((attempts[key] ?: 0) + 1).coerceAtMost(30)
                                 attempts[key] = count; nextAttempt[key] = now() + retryDelay(count)
                             } else {
                                 blocked += key
+                                waitingForSpace -= key
                                 report(com.cruisetune.player.core.readableError(e))
                             }
                         } finally {
@@ -95,7 +98,11 @@ class LookAheadPrefetch(
                     }
                 }
                 if (blocked.isEmpty()) {
-                    report(if (nextAttempt.isEmpty()) null else "网络暂不可用，后续歌曲将持续重试缓存")
+                    report(when {
+                        nextAttempt.isEmpty() -> null
+                        waitingForSpace.isNotEmpty() -> "缓存空间不足，后续歌曲将稍后重试"
+                        else -> "网络暂不可用，后续歌曲将持续重试缓存"
+                    })
                 }
                 // Recheck disk spans: clearing/evicting cached content must not leave a stale 'done' flag.
                 wait(2000)

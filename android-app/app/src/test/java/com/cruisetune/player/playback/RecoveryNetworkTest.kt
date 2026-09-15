@@ -196,28 +196,31 @@ class RecoveryNetworkTest {
         } finally { owner.destroy() }
     }
 
-    @Test fun pauseSeekAndScreenOffCancelADelayedNetworkRetry() {
+    @Test fun pauseCancelsADelayedNetworkRetry() = exerciseRetryCancellation("pause")
+    @Test fun seekCancelsThePreviousTracksDelayedNetworkRetry() = exerciseRetryCancellation("seek")
+    @Test fun screenOffCancelsADelayedNetworkRetry() = exerciseRetryCancellation("screen-off")
+    private fun exerciseRetryCancellation(stop: String) {
         val tracks = seed(); val opens = AtomicInteger()
         ReflectionHelpers.setField(app.media, "network", factory(opens))
         val owner = Robolectric.buildService(PlaybackService::class.java).create(); val service = owner.get(); val player = player(service)
         try {
             await("Queue must restore") { player.mediaItemCount == 2 }
-            for (stop in listOf("pause", "seek", "screen-off")) {
-                player.seekTo(0, 1200); player.play(); shadowOf(Looper.getMainLooper()).idle()
-                injectRecovery(service, tracks[0]); report(service, transportFailure())
-                assertTrue(action(service)?.isActive == true)
-                when (stop) {
-                    "pause" -> player.pause()
-                    "seek" -> player.seekTo(1, 0)
-                    else -> invoke(service, "pauseForScreenOff")
-                }
-                shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(35))
-                assertFalse(stop, action(service)?.isActive == true)
-                assertNull(stop, recovery(service))
-                assertFalse(stop, app.media.isBypassed(tracks[0].cacheKey))
-                assertEquals(stop, 0, opens.get())
-                if (stop != "seek") assertFalse(player.playWhenReady)
+            // Keep each case isolated: an explicit seek after the previous case's error now
+            // legitimately prepares the selected item, and must not pollute a later case's counts.
+            player.seekTo(0, 1200); player.play(); shadowOf(Looper.getMainLooper()).idle()
+            injectRecovery(service, tracks[0]); report(service, transportFailure())
+            assertTrue(action(service)?.isActive == true)
+            when (stop) {
+                "pause" -> player.pause()
+                "seek" -> player.seekTo(1, 0)
+                else -> invoke(service, "pauseForScreenOff")
             }
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(35))
+            assertFalse(stop, action(service)?.isActive == true)
+            assertNull(stop, recovery(service))
+            assertFalse(stop, app.media.isBypassed(tracks[0].cacheKey))
+            assertEquals(stop, 0, opens.get())
+            if (stop != "seek") assertFalse(player.playWhenReady)
         } finally { owner.destroy() }
     }
 

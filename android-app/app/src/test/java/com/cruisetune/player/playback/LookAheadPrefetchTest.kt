@@ -10,6 +10,18 @@ import java.net.SocketTimeoutException
 @OptIn(ExperimentalCoroutinesApi::class)
 @androidx.media3.common.util.UnstableApi
 class LookAheadPrefetchTest {
+    @Test fun storageRecoveryDoesNotRequireAQueueOrGateChange() = runTest {
+        var space = false; var completed = false; var attempts = 0
+        val engine = LookAheadPrefetch(backgroundScope, { completed }, { object : PrefetchAttempt {
+            override suspend fun cache() { attempts++; if (!space) throw CacheStorageUnavailable(); completed = true }
+            override fun cancel() {}
+        } }, { testScheduler.currentTime }, workerDispatcher = StandardTestDispatcher(testScheduler))
+        engine.update(listOf(tracks()[1]), true); runCurrent()
+        assertEquals(1, attempts); assertFalse(completed)
+        space = true; advanceTimeBy(2000); runCurrent()
+        assertTrue(completed); assertEquals(2, attempts)
+        engine.cancel(); runCurrent()
+    }
     private fun tracks() = (0..5).map { Track("$it", "source", "$it", "Song $it", size = 5000000) }
     @Test fun followsNextThreeAndLoopBoundary() {
         val t=tracks()

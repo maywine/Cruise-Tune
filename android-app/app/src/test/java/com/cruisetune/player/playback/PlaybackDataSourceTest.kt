@@ -14,6 +14,23 @@ import org.robolectric.annotation.Config
 @Config(sdk = [28], application = Application::class, manifest = Config.NONE)
 @androidx.media3.common.util.UnstableApi
 class PlaybackDataSourceTest {
+    @Test fun knownBoundaryHandlesExactEndAndDoesNotLimitAnExplicitBypass() {
+        var opens = 0; var bypass = false
+        val factory = DataSource.Factory { opens++; ByteArrayDataSource(ByteArray(8) { 7 }) }
+        val source = PlaybackDataSource(factory, factory, { bypass }, knownLength = { 4 })
+        val spec = DataSpec.Builder().setUri("cruisetune://track/a").setKey("a").build()
+        try {
+            assertEquals(4L, source.open(spec)); val bytes = ByteArray(16)
+            assertEquals(4, source.read(bytes, 0, 16)); assertEquals(-1, source.read(bytes, 0, 16))
+            source.close()
+            assertEquals(0L, source.open(spec.buildUpon().setPosition(4).build()))
+            assertEquals(0, source.read(bytes, 0, 0)); assertEquals(-1, source.read(bytes, 0, 16))
+            assertEquals(1, opens); assertEquals(spec.uri, source.uri)
+            source.close(); bypass = true
+            assertEquals(8L, source.open(spec)); assertEquals(8, source.read(bytes, 0, 16))
+            assertEquals(2, opens)
+        } finally { source.close() }
+    }
     @Test fun bypassDoesNotReadOrOverwriteTheOldCacheAndIsScopedToOneKey() {
         var cached = 0; var network = 0
         val bypass = mutableSetOf<String>()

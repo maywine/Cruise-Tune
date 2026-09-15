@@ -34,11 +34,13 @@ class MediaCache(private val app: CruiseApplication) {
     private val stat get() = StatFs(app.filesDir.absolutePath)
     val reserveBytes get() = maxOf(1024L * 1024 * 1024, stat.totalBytes / 10)
     val hasRoom get() = stat.availableBytes > reserveBytes
-    val streamLimitBytes: Long = run {
-        val requested = app.preferences.getLong("cacheLimit", 2L * 1024 * 1024 * 1024)
-        minOf(requested, (stat.availableBytes - reserveBytes).coerceAtLeast(0))
-    }
-    val stream = SimpleCache(File(app.filesDir, "stream-cache"), LeastRecentlyUsedCacheEvictor(streamLimitBytes), databaseProvider)
+    private val configuredStreamLimit = app.preferences.getLong("cacheLimit", 2L * 1024 * 1024 * 1024)
+        .coerceIn(0, 2L * 1024 * 1024 * 1024)
+    // Existing bytes have already consumed disk space. The reserve limits NEW writes; it must
+    // not be deducted again from the LRU capacity when the process reopens an existing cache.
+    val stream = SimpleCache(File(app.filesDir, "stream-cache"), LeastRecentlyUsedCacheEvictor(configuredStreamLimit), databaseProvider)
+    val streamLimitBytes: Long get() = minOf(configuredStreamLimit,
+        stream.cacheSpace + (stat.availableBytes - reserveBytes).coerceIn(0, configuredStreamLimit))
     val offline = SimpleCache(File(app.filesDir, "offline-cache"), NoOpCacheEvictor(), databaseProvider)
     private val network = DataSource.Factory { ResolvingTrackSource(app) }
     internal class Bypass(val key: String)
@@ -53,15 +55,27 @@ class MediaCache(private val app: CruiseApplication) {
     })
     val streamFactory: CacheDataSource.Factory = CacheDataSource.Factory().setCache(stream)
         .setCacheReadDataSourceFactory(cacheReader(streamReads))
-        .setCacheWriteDataSinkFactory { CompletingCacheSink(CacheDataSink.Factory().setCache(stream)) }
+        .setCacheWriteDataSinkFactory {
+            StorageGuardedCacheSink(CompletingCacheSink(CacheDataSink.Factory().setCache(stream))) { count ->
+                configuredStreamLimit > 0 && stat.availableBytes - reserveBytes >= count
+            }
+        }
         .setUpstreamDataSourceFactory(network).setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
     private val cachedPlaybackFactory = CacheDataSource.Factory().setCache(offline)
         .setCacheReadDataSourceFactory(cacheReader(offlineReads))
         .setCacheWriteDataSinkFactory(null).setUpstreamDataSourceFactory(streamFactory)
         .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
-    val playbackFactory = DataSource.Factory { PlaybackDataSource(cachedPlaybackFactory, network, ::isBypassed) { key ->
+    val playbackFactory = DataSource.Factory { PlaybackDataSource(cachedPlaybackFactory, network, ::isBypassed, ::completeCachedLength) { key ->
         if (key != null) { streamReads.remove(key); offlineReads.remove(key) }
     } }
+    private fun completeCachedLength(spec: DataSpec): Long {
+        val key = spec.key ?: return C.LENGTH_UNSET.toLong()
+        val id = spec.uri.takeIf { it.scheme == "cruisetune" && it.host == "track" }?.lastPathSegment
+            ?: return C.LENGTH_UNSET.toLong()
+        val track = app.database.findTrackForCache(id, key) ?: return C.LENGTH_UNSET.toLong()
+        return track.size.takeIf { it > 0 && (stream.isCached(key, 0, it) || offline.isCached(key, 0, it)) }
+            ?: C.LENGTH_UNSET.toLong()
+    }
     internal fun isBypassed(key: String?) = key != null && bypasses.containsKey(key)
     internal fun canRepairStreaming(track: Track) = track.localUri.isBlank() && track.cacheKey in streamReads && track.cacheKey !in offlineReads
     internal fun hasCompleteStreamingCache(track: Track): Boolean {
@@ -71,7 +85,7 @@ class MediaCache(private val app: CruiseApplication) {
     internal fun beginBypass(track: Track) = Bypass(track.cacheKey).also { bypasses[it.key] = it }
     internal fun endBypass(bypass: Bypass) { bypasses.remove(bypass.key, bypass) }
     internal suspend fun repairStreaming(track: Track, bypass: Bypass) {
-        StreamCacheRepair(stream, network, app.cacheDir, streamLimitBytes, { hasRoom }).repair(track,
+        StreamCacheRepair(stream, network, app.cacheDir, streamLimitBytes, { hasRoom }, configuredStreamLimit).repair(track,
             versionCurrent = { app.library.findTrack(track.id)?.cacheKey == track.cacheKey }) {
             bypasses[track.cacheKey] === bypass
         }
@@ -145,11 +159,13 @@ internal class WholeTrackCacheAttempt(
     override suspend fun cache() {
         kotlinx.coroutines.currentCoroutineContext().ensureActive()
         if (cancelled.get()) throw kotlinx.coroutines.CancellationException()
-        if (!hasRoom() || length > limitBytes) throw UserError("缓存空间不足，后续歌曲暂缓下载")
+        if (!hasRoom()) throw CacheStorageUnavailable()
+        if (length > limitBytes) throw UserError("缓存空间不足，后续歌曲暂缓下载")
         val spec = DataSpec.Builder().setUri("cruisetune://track/${track.id}").setKey(track.cacheKey)
             .setLength(C.LENGTH_UNSET.toLong()).setFlags(DataSpec.FLAG_ALLOW_CACHE_FRAGMENTATION).build()
         val attempt = androidx.media3.datasource.cache.CacheWriter(factory.createDataSource(), spec, ByteArray(64 * 1024)) { total, _, _ ->
-            if (!hasRoom() || total > limitBytes) throw UserError("缓存空间不足，后续歌曲暂缓下载")
+            if (!hasRoom()) throw CacheStorageUnavailable()
+            if (total > limitBytes) throw UserError("缓存空间不足，后续歌曲暂缓下载")
             if (length > 0 && total > 0 && total != length) throw UserError("文件大小已变化，请刷新曲库")
         }
         writer = attempt

@@ -22,7 +22,11 @@ class QuarkApi(
     private val readCookie: () -> String?,
     private val saveCookie: (String) -> Unit,
     private val base: HttpUrl = "https://drive-pc.quark.cn/1/clouddrive/".toHttpUrl(),
+    private val cookieLock: Any = Any(),
+    private val cookieRevision: () -> Any? = readCookie,
 ) : MusicProvider {
+    private class CookieSnapshot(val value: String, val revision: Any?)
+    private class Reply(val json: JSONObject, val cookie: String)
     companion object {
         const val USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         const val PC_CLIENT_VERSION = "2.5.56"
@@ -45,7 +49,7 @@ class QuarkApi(
         val result = linkedMapOf<String, RemoteEntry>()
         for (page in 1..1000) {
             currentCoroutineContext().ensureActive()
-            val json = request("file/sort", mapOf("pdir_fid" to parentId, "_page" to page.toString(), "_size" to "100", "_fetch_total" to "1", "fetch_all_file" to "1", "fetch_risk_file_name" to "1", "_sort" to "file_type:asc,file_name:asc"))
+            val json = request("file/sort", mapOf("pdir_fid" to parentId, "_page" to page.toString(), "_size" to "100", "_fetch_total" to "1", "fetch_all_file" to "1", "fetch_risk_file_name" to "1", "_sort" to "file_type:asc,file_name:asc")).json
             val list = json.optJSONObject("data")?.optJSONArray("list") ?: throw UserError("夸克目录数据不完整，请重新刷新")
             val before = result.size
             for (i in 0 until list.length()) {
@@ -74,31 +78,35 @@ class QuarkApi(
     override suspend fun resolve(fileId: String): ReadRequest {
         // Verified with a web-authorized FLAC above 50 MiB. Playback still reads only
         // requested byte ranges; this does not change the OAuth/Token provider.
-        val json = request("file/download", query = mapOf("sys" to "win32", "ve" to PC_CLIENT_VERSION, "ut" to "", "guid" to ""),
+        val reply = request("file/download", query = mapOf("sys" to "win32", "ve" to PC_CLIENT_VERSION, "ut" to "", "guid" to ""),
             body = JSONObject().put("fids", JSONArray().put(fileId)), userAgent = PC_DOWNLOAD_USER_AGENT)
-        val data = json.optJSONArray("data") ?: throw UserError("暂时无法获取夸克文件地址")
+        val data = reply.json.optJSONArray("data") ?: throw UserError("暂时无法获取夸克文件地址")
         val match = (0 until data.length()).map { data.getJSONObject(it) }.firstOrNull { it.optString("fid", fileId) == fileId }
             ?: throw UserError("夸克文件已不可用")
         val url = match.optString("download_url").ifEmpty { throw UserError("夸克尚未提供可用下载地址") }.toHttpUrl()
         val trusted = listOf("quark.cn", "uc.cn", "ucweb.com").any { url.host == it || url.host.endsWith(".$it") }
         if (url.scheme != "https" || !trusted) throw UserError("夸克下载域名已变化，需要更新接入适配")
-        return ReadRequest(url.toString(), mapOf("Cookie" to cookie(), "Referer" to REFERER, "User-Agent" to PC_DOWNLOAD_USER_AGENT))
+        return ReadRequest(url.toString(), mapOf("Cookie" to reply.cookie, "Referer" to REFERER, "User-Agent" to PC_DOWNLOAD_USER_AGENT))
     }
 
     private fun cookie(): String = readCookie()?.takeIf { validCookie(it) } ?: throw UserError("夸克账号需重新连接", true)
+    private fun snapshot() = synchronized(cookieLock) { CookieSnapshot(cookie(), cookieRevision()) }
+    private fun isCurrent(snapshot: CookieSnapshot) = synchronized(cookieLock) { cookieRevision() == snapshot.revision }
 
-    private suspend fun request(path: String, query: Map<String, String> = emptyMap(), body: JSONObject? = null, userAgent: String = USER_AGENT): JSONObject = withContext(Dispatchers.IO) {
+    private suspend fun request(path: String, query: Map<String, String> = emptyMap(), body: JSONObject? = null, userAgent: String = USER_AGENT): Reply = withContext(Dispatchers.IO) {
         val url = base.newBuilder().addPathSegments(path).addQueryParameter("pr", "ucpro").addQueryParameter("fr", "pc").apply {
             query.forEach { (key, value) -> addQueryParameter(key, value) }
         }.build()
-        val builder = Request.Builder().url(url).header("Cookie", cookie()).header("Referer", REFERER)
+        val builder = Request.Builder().url(url).header("Referer", REFERER)
             .header("User-Agent", userAgent).header("Accept", "application/json")
         if (body != null) builder.post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
         val transport = client.newBuilder().followRedirects(false).followSslRedirects(false).build()
         for (attempt in 0..2) {
             currentCoroutineContext().ensureActive()
+            val sent = snapshot()
             var waitMs = (attempt + 1) * 1000L
-            val result = transport.newCall(builder.header("Cookie", cookie()).build()).execute().use { response ->
+            val result = transport.newCall(builder.header("Cookie", sent.value).build()).execute().use { response ->
+                if (!isCurrent(sent)) { waitMs = 0; return@use null }
                 if (response.code == 401 || response.code == 403) throw UserError("夸克账号需重新连接", true)
                 if (response.code == 429) {
                     if (attempt == 2) throw UserError("夸克请求较多，请稍后再试", retryable = true)
@@ -114,18 +122,29 @@ class QuarkApi(
                     throw UserError("夸克暂时无法连接，请稍后重试", retryable = response.code in listOf(408, 425) || response.code >= 500)
                 }
                 val updates = Cookie.parseAll(url, response.headers).map { it.name to it.value }
-                if (updates.isNotEmpty()) saveCookie(mergeCookies(cookie(), updates))
                 val raw = response.body?.string() ?: throw UserError("夸克返回了空数据")
+                if (!isCurrent(sent)) { waitMs = 0; return@use null }
                 val json = runCatching { JSONObject(raw) }.getOrElse { throw UserError("夸克响应格式已变化，请稍后重试") }
                 val status = json.optInt("status", 200)
                 if (status == 401 || status == 403) throw UserError("夸克账号需重新连接", true)
                 if (json.optInt("code", 0) == 23018) throw UserError("夸克限制了该文件下载，请检查网盘下载权限")
                 if (json.optInt("code", 0) != 0 || status >= 400) throw UserError("夸克未允许本次读取，请检查账号或文件权限")
-                json
+                // Match and commit under the same monitor used by vault put/remove/login.
+                val accepted = synchronized(cookieLock) {
+                    if (cookieRevision() != sent.revision) null
+                    else {
+                        val value = mergeCookies(sent.value, updates)
+                        if (!validCookie(value)) throw UserError("夸克账号需重新连接", true)
+                        if (value != sent.value) saveCookie(value)
+                        Reply(json, value)
+                    }
+                }
+                if (accepted == null) waitMs = 0
+                accepted
             }
             if (result != null) return@withContext result
             delay(waitMs)
         }
-        throw UserError("夸克暂时无法连接")
+        throw UserError("登录状态已更新，请稍后重试", retryable = true)
     }
 }

@@ -95,6 +95,13 @@ class QuarkApiTest {
         assertFalse(QuarkApi.validCookie("not-a-quark-session"))
         assertTrue(QuarkApi.validCookie("__puus=valid-session"))
     }
+    @Test fun invalidCookieRotationDoesNotReplaceTheSavedSession() = runBlocking {
+        cookie = "__puus=valid-session"
+        server.enqueue(MockResponse().setHeader("Set-Cookie", "__puus=; Max-Age=0; Path=/").setBody(page(emptyList(), 0)))
+        val error = runCatching { api.listChildren("0") }.exceptionOrNull()
+        assertTrue(error is UserError && error.needsLogin)
+        assertEquals("__puus=valid-session", cookie)
+    }
     @Test fun rateLimitWaitsThenRetriesTheSameDirectory() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(429).setHeader("Retry-After", "0"))
         server.enqueue(MockResponse().setBody(page(listOf(file("song")), 1)))

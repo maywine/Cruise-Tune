@@ -96,6 +96,17 @@ class LibraryDatabase(context: Context) : SQLiteOpenHelper(context, "cruise-libr
             while(c.moveToNext()) add(c.getString(0))
         } }
     }
+    /** Old queue versions may still have a complete cache after a newer directory scan. */
+    fun findTrackForCache(id: String, key: String): Track? {
+        findTrack(id)?.takeIf { it.cacheKey == key }?.let { return it }
+        return readableDatabase.rawQuery("SELECT payload FROM queue_items WHERE track_id=? ORDER BY revision DESC", arrayOf(id)).use { c ->
+            while (c.moveToNext()) {
+                val track = runCatching { JsonCodec.decode(c.getString(0)) }.getOrNull()
+                if (track?.cacheKey == key) return@use track
+            }
+            null
+        }
+    }
     fun replaceScan(sourceId: String, found: List<Track>, retainedTrackIds: Set<String>? = emptySet()) = transaction { db ->
         db.execSQL("UPDATE tracks SET present=0 WHERE source_id=?", arrayOf(sourceId))
         found.distinctBy { it.id }.forEach { track ->
