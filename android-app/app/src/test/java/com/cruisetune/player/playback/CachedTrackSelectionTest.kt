@@ -22,12 +22,15 @@ import org.junit.runner.RunWith
 import org.robolectric.*
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
+import org.robolectric.shadows.ShadowAudioTrack
 import org.robolectric.android.controller.ServiceController
 import org.robolectric.shadows.ShadowStatFs
 import org.robolectric.util.ReflectionHelpers
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [28, 33], application = CruiseApplication::class)
+@Config(sdk = [28, 33], application = CruiseApplication::class, shadows = [CacheSelectionAudioTrack::class])
 @androidx.media3.common.util.UnstableApi
 class CachedTrackSelectionTest {
     private val app get() = RuntimeEnvironment.getApplication() as CruiseApplication
@@ -42,14 +45,14 @@ class CachedTrackSelectionTest {
         ShadowStatFs.registerStats(app.filesDir.absolutePath, 2000000, 1500000, 1500000)
         app.preferences.edit().putBoolean("prefetchNextTracks", false).commit()
     }
-    private fun await(message: String, condition: () -> Boolean) {
+    private fun await(message: String, diagnostic: () -> String = { "" }, condition: () -> Boolean) {
         val deadline = System.nanoTime() + 8_000_000_000L
         while (System.nanoTime() < deadline) {
             shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(10))
             if (condition()) return
             Thread.sleep(5)
         }
-        fail(message)
+        fail("$message ${diagnostic()}")
     }
     private data class Fixture(val owner: ServiceController<PlaybackService>, val player: ExoPlayer,
         val tracks: List<Track>, val requests: AtomicInteger, val requestsByKey: Map<String, AtomicInteger>)
@@ -100,7 +103,9 @@ class CachedTrackSelectionTest {
             failFirst(f)
             for (index in 1..3) {
                 f.player.seekToNextMediaItem() // Same session command as the next button / media controls.
-                await("Next cached song must prepare after a prior Quark failure; index=$index, offline=$offline") {
+                await("Next cached song must prepare after a prior Quark failure; index=$index, offline=$offline", diagnostic = {
+                    "actualIndex=${f.player.currentMediaItemIndex}, state=${f.player.playbackState}, intent=${f.player.playWhenReady}, position=${f.player.currentPosition}, error=${f.player.playerError?.errorCodeName}, requests=${f.requests.get()}"
+                }) {
                     f.player.currentMediaItemIndex == index && f.player.playbackState == Player.STATE_READY && f.player.playerError == null
                 }
                 assertTrue(f.player.playWhenReady)
@@ -113,6 +118,21 @@ class CachedTrackSelectionTest {
         } finally { f.owner.destroy() }
     }
     @Test fun nextTracksUseStreamingCacheAfterATerminalQuarkFailure() = cachedSteps(false, false)
+    @Test fun cachedSelectionDoesNotDrainTheShortFixtureBeforeAssertionsObserveIt() {
+        val f = fixture(offline = true, authError = true)
+        try {
+            failFirst(f); f.player.seekToNextMediaItem()
+            await("Cached selection should prepare") { f.player.playbackState == Player.STATE_READY }
+            repeat(20) {
+                shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(50))
+                Thread.sleep(5)
+            }
+            assertEquals("A cache-selection test must retain the selected item while inspecting it", 1, f.player.currentMediaItemIndex)
+            assertEquals(Player.STATE_READY, f.player.playbackState)
+            assertTrue(f.player.playWhenReady)
+            assertEquals(1, f.requests.get())
+        } finally { f.owner.destroy() }
+    }
     private fun wheel(f: Fixture, action: SteeringAction, valid: () -> Boolean = { true }) {
         PlaybackService::class.java.getDeclaredMethod("handleSteeringAction", SteeringAction::class.java, Function0::class.java)
             .apply { isAccessible = true }.invoke(f.owner.get(), action, valid)
@@ -231,4 +251,14 @@ class CachedTrackSelectionTest {
             assertEquals(0, f.requests.get())
         } finally { f.owner.destroy() }
     }
+}
+
+/** These tests assert selection, prepare, pause intent and cache routing, not time progression.
+ * Robolectric normally reports every written PCM frame as already played, which drains the
+ * eight-second fixture immediately and can skip READY between assertions on a busy runner.
+ * Keep the device playback head fixed; the real decoder, cache readers and service still run. */
+@Implements(android.media.AudioTrack::class)
+class CacheSelectionAudioTrack : ShadowAudioTrack() {
+    @Implementation
+    protected override fun getPlaybackHeadPosition(): Int = 0
 }
