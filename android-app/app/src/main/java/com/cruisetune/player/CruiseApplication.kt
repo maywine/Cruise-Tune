@@ -27,6 +27,7 @@ class CruiseApplication : Application() {
     val library by lazy { LibraryRepository(this, database, vault, http, openConnections, ::offlineTrackIds) }
     val lyrics by lazy { LyricsRepository(this, library, http) }
     internal val playbackMetadata = kotlinx.coroutines.flow.MutableStateFlow(com.cruisetune.player.playback.PlaybackMetadata())
+    internal val steeringStatus = kotlinx.coroutines.flow.MutableStateFlow(com.cruisetune.player.steering.SteeringStatus())
     private fun offlineTrackIds(): Set<String> = offlineIndex.getDownloads().use { cursor ->
         buildSet {
             while (cursor.moveToNext()) {

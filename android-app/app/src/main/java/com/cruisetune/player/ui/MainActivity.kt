@@ -42,6 +42,7 @@ import com.cruisetune.player.core.*
 import com.cruisetune.player.data.LibraryState
 import com.cruisetune.player.data.JsonCodec
 import com.cruisetune.player.playback.PlaybackService
+import com.cruisetune.player.steering.*
 import com.cruisetune.player.ui.Design.dp
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.*
@@ -885,6 +886,7 @@ class MainActivity : CruiseActivity() {
         action(content,"封面与歌词") { dialog.dismiss();showTrackDetails() }
         toggle(content, "打开应用时继续播放", "resumeOnOpen", false)
         paragraph(content, "熄屏时自动暂停并保存进度，亮屏后点击继续播放。")
+        action(content, "方向盘按键") { dialog.dismiss(); showSteeringSettings() }
         section(content,"缓存与离线")
         toggle(content, "自动缓存后 3 首", "prefetchNextTracks", true)
         paragraph(content, "按播放顺序缓存后 3 首完整歌曲，所有网络均可使用；网络中断后持续重试。")
@@ -921,6 +923,49 @@ class MainActivity : CruiseActivity() {
             paragraph(body, assets.open("third_party_notices.txt").bufferedReader().use { it.readText() })
             showPanel(licenses)
         }
+    }
+    private fun showSteeringSettings() {
+        val settings = SteeringSettings(app.preferences)
+        val (dialog, content) = panel("方向盘按键")
+        paragraph(content, "标准媒体按键通常无需设置。原车按键无响应时，可开启车机适配；请停车后配置。")
+        toggle(content, "启用 OneOS 车机适配", SteeringSettings.ENABLED, false)
+        toggle(content, "只检测按键，不控制播放", SteeringSettings.DETECT_ONLY, false)
+        val status = Design.label(this, "", 20f, Design.secondary).apply { setLineSpacing(dp(5).toFloat(), 1f) }
+        content.addView(status, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12); bottomMargin = dp(8) })
+        paragraph(content, "仅在方向盘切到媒体菜单后控制播放；其他菜单或状态未知时不执行。单击等待 350 毫秒识别双击；双击、长按默认不执行。熄屏和通话时不会恢复播放。")
+        val refreshButtons = mutableListOf<() -> Unit>()
+        for (key in SteeringKey.entries) {
+            section(content, key.label)
+            for (gesture in SteeringGesture.entries) {
+                val label = { "${gesture.label} · ${settings.action(key, gesture).label}" }
+                lateinit var button: TouchButton
+                button = action(content, label()) {
+                    val (choose, choices) = panel("${key.label} · ${gesture.label}")
+                    for (action in SteeringAction.entries) {
+                        action(choices, action.label) {
+                            settings.setAction(key, gesture, action); button.text = label()
+                            button.contentDescription = "${key.label}，${label()}"; choose.dismiss()
+                        }.selectedState(settings.action(key, gesture) == action)
+                    }
+                    showPanel(choose)
+                }
+                button.contentDescription = "${key.label}，${label()}"
+                refreshButtons += { button.text = label(); button.contentDescription = "${key.label}，${label()}" }
+            }
+        }
+        action(content, "恢复默认按键动作") {
+            settings.resetMappings()
+            refreshButtons.forEach { it() }
+        }
+        val observe = lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                app.steeringStatus.collect { value ->
+                    status.text = listOf(value.connection, value.detail, value.menu, value.lastEvent, value.lastAction).filter { it.isNotBlank() }.joinToString("\n")
+                }
+            }
+        }
+        dialog.setOnDismissListener { observe.cancel() }
+        showPanel(dialog)
     }
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)

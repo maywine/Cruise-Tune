@@ -12,6 +12,8 @@ import androidx.media3.session.*
 import com.cruisetune.player.CruiseApplication
 import com.cruisetune.player.core.*
 import com.cruisetune.player.ui.MainActivity
+import com.cruisetune.player.steering.SteeringAction
+import com.cruisetune.player.steering.SteeringController
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
@@ -51,6 +53,7 @@ class PlaybackService : MediaLibraryService() {
     private var persistedIntent = false
     private var screenOffObserved = false
     private lateinit var screenOff: ScreenOffMonitor
+    private lateinit var steering: SteeringController
     private val ready = CompletableDeferred<Unit>()
     private var prefetchMessage: String? = null
     private var capacityMessage: String? = null
@@ -85,6 +88,7 @@ class PlaybackService : MediaLibraryService() {
         val activity = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         session = MediaLibrarySession.Builder(this, player, Callbacks()).setSessionActivity(activity).build()
         screenOff = ScreenOffMonitor(this, ::pauseForScreenOff)
+        steering = SteeringController(this, scope, app.preferences, app.steeringStatus, ::handleSteeringAction)
         diskScope.launch {
             for (write in writes) {
                 try {
@@ -176,6 +180,7 @@ class PlaybackService : MediaLibraryService() {
         }
     }
     private fun pauseForScreenOff() {
+        if (::steering.isInitialized) steering.cancelPending()
         screenOffObserved = true
         persistedIntent = false
         val wasRecovering = recovery != null
@@ -192,6 +197,34 @@ class PlaybackService : MediaLibraryService() {
         screenOffObserved = false
         if (restartCurrent) PlaybackOperations.retry(player)
         else { player.prepare(); player.play() }
+    }
+    private fun handleSteeringAction(action: SteeringAction, valid: () -> Boolean) {
+        // Never replay key presses collected during startup or a long-running queue update.
+        if (!ready.isCompleted) { steering.result("曲库尚未就绪，请稍后按键"); return }
+        val received = android.os.SystemClock.uptimeMillis()
+        scope.launch {
+            commandLock.withLock {
+                if (!valid() || android.os.SystemClock.uptimeMillis() - received > 1000) return@withLock
+                if (screenOff.isScreenOff()) { steering.result("屏幕已关闭，保持暂停"); return@withLock }
+                val audio = getSystemService(android.media.AudioManager::class.java)
+                if (audio.mode != android.media.AudioManager.MODE_NORMAL || player.playbackSuppressionReason != Player.PLAYBACK_SUPPRESSION_REASON_NONE ||
+                    (audio.isMusicActive && !player.playWhenReady)) {
+                    steering.result("其他音频正在使用，未执行按键动作"); return@withLock
+                }
+                if (player.mediaItemCount == 0) { steering.result("请先从曲库播放歌曲"); return@withLock }
+                when (action) {
+                    SteeringAction.NONE -> return@withLock
+                    SteeringAction.TOGGLE -> if (player.playWhenReady) player.pause() else prepareAndPlay(player.playerError != null || player.playbackState == Player.STATE_ENDED)
+                    SteeringAction.PLAY -> if (!player.playWhenReady || player.playerError != null) prepareAndPlay(player.playerError != null || player.playbackState == Player.STATE_ENDED)
+                    SteeringAction.PAUSE -> player.pause()
+                    SteeringAction.NEXT -> if (player.hasNextMediaItem()) player.seekToNextMediaItem() else {
+                        steering.result("已到队列末尾"); return@withLock
+                    }
+                    SteeringAction.PREVIOUS -> if (player.hasPreviousMediaItem()) player.seekToPreviousMediaItem() else player.seekTo(0)
+                }
+                steering.result("已执行：${action.label}")
+            }
+        }
     }
     private fun snapshot() = PlaybackSnapshot(revision, entries, player.currentMediaItemIndex.coerceAtLeast(0), if (player.playbackState == Player.STATE_ENDED) 0 else player.currentPosition.coerceAtLeast(0), persistedIntent, player.repeatMode, shuffled)
     private fun persist() { if (!applying && entries.isNotEmpty()) save(snapshot()) }
@@ -470,6 +503,7 @@ class PlaybackService : MediaLibraryService() {
     }
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession = session
     override fun onDestroy() {
+        steering.close()
         screenOff.stop()
         cancelRecovery()
         persist(); writes.close(); cancelPrefetch(); scope.cancel()
@@ -483,6 +517,12 @@ class PlaybackService : MediaLibraryService() {
         return f
     }
     private inner class Callbacks : MediaLibrarySession.Callback {
+        override fun onMediaButtonEvent(session: MediaSession, controllerInfo: MediaSession.ControllerInfo, mediaButtonIntent: Intent): Boolean {
+            val key = androidx.core.content.IntentCompat.getParcelableExtra(mediaButtonIntent, Intent.EXTRA_KEY_EVENT, android.view.KeyEvent::class.java)
+            // OneOS owns these three hardware buttons only after a verified subscription. Notification
+            // transport controls are unaffected. Disconnecting restores Media3's standard key handling.
+            return key != null && ::steering.isInitialized && steering.ownsMediaButton(key.keyCode)
+        }
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
             val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
             if (controller.packageName == packageName) listOf(PLAY_TRACK, SHUFFLE, SORT_QUEUE, RESUME_ON_OPEN, RETRY, REMOVE_SOURCE, DISCONNECT_TOKEN).forEach { commands.add(SessionCommand(it, Bundle.EMPTY)) }

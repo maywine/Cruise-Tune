@@ -9,6 +9,7 @@ import androidx.media3.datasource.cache.*
 import androidx.media3.exoplayer.ExoPlayer
 import com.cruisetune.player.CruiseApplication
 import com.cruisetune.player.core.*
+import com.cruisetune.player.steering.SteeringAction
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.time.Duration
@@ -112,6 +113,55 @@ class CachedTrackSelectionTest {
         } finally { f.owner.destroy() }
     }
     @Test fun nextTracksUseStreamingCacheAfterATerminalQuarkFailure() = cachedSteps(false, false)
+    private fun wheel(f: Fixture, action: SteeringAction, valid: () -> Boolean = { true }) {
+        PlaybackService::class.java.getDeclaredMethod("handleSteeringAction", SteeringAction::class.java, Function0::class.java)
+            .apply { isAccessible = true }.invoke(f.owner.get(), action, valid)
+        shadowOf(Looper.getMainLooper()).idle()
+    }
+    @Test fun steeringNextAfterQuarkFailurePlaysCompleteCacheWithoutNetwork() {
+        val f = fixture(authError = true)
+        try {
+            failFirst(f); wheel(f, SteeringAction.NEXT)
+            await("Steering Next must reuse error recovery for cached songs") { f.player.currentMediaItemIndex == 1 && f.player.playbackState == Player.STATE_READY }
+            assertNull(f.player.playerError); assertTrue(f.player.playWhenReady); assertEquals(1, f.requests.get())
+        } finally { f.owner.destroy() }
+    }
+    @Test fun steeringNextWhilePausedKeepsPauseIntent() {
+        val f = fixture()
+        try {
+            failFirst(f); f.player.pause(); wheel(f, SteeringAction.NEXT)
+            await("Paused wheel selection should clear old error") { f.player.currentMediaItemIndex == 1 && f.player.playbackState == Player.STATE_READY }
+            assertFalse(f.player.playWhenReady); assertEquals(1, f.requests.get())
+        } finally { f.owner.destroy() }
+    }
+    @Test fun steeringTogglePreparesPausedCompleteCacheAndThenPauses() {
+        val f = fixture()
+        try {
+            f.player.seekTo(1, 0); wheel(f, SteeringAction.TOGGLE)
+            await("Wheel Play must prepare") { f.player.playbackState == Player.STATE_READY && f.player.playWhenReady }
+            wheel(f, SteeringAction.TOGGLE); assertFalse(f.player.playWhenReady); assertEquals(0, f.requests.get())
+        } finally { f.owner.destroy() }
+    }
+    @Test fun wheelDoesNotResumeOrChangeSelectionDuringScreenOffOrCall() {
+        val f = fixture()
+        try {
+            f.player.seekTo(1, 0)
+            shadowOf(app.getSystemService(PowerManager::class.java)).setIsInteractive(false)
+            wheel(f, SteeringAction.NEXT); wheel(f, SteeringAction.PLAY)
+            assertEquals(1, f.player.currentMediaItemIndex); assertFalse(f.player.playWhenReady)
+            shadowOf(app.getSystemService(PowerManager::class.java)).setIsInteractive(true)
+            app.getSystemService(android.media.AudioManager::class.java).mode = android.media.AudioManager.MODE_IN_COMMUNICATION
+            wheel(f, SteeringAction.NEXT); wheel(f, SteeringAction.TOGGLE)
+            assertEquals(1, f.player.currentMediaItemIndex); assertFalse(f.player.playWhenReady)
+        } finally { f.owner.destroy() }
+    }
+    @Test fun disabledOrStaleSteeringCommandCannotChangePlayback() {
+        val f = fixture()
+        try {
+            f.player.seekTo(1, 0); wheel(f, SteeringAction.NEXT) { false }; wheel(f, SteeringAction.PLAY) { false }
+            assertEquals(1, f.player.currentMediaItemIndex); assertFalse(f.player.playWhenReady); assertEquals(0, f.requests.get())
+        } finally { f.owner.destroy() }
+    }
     @Test fun nextTracksUseOfflineCacheEvenWhenTheAccountRequiresLogin() = cachedSteps(true, true)
     @Test fun cachedSelectionWhilePausedMustNotStartPlaying() {
         val f = fixture()

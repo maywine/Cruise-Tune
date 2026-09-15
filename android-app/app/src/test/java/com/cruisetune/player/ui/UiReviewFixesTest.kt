@@ -9,6 +9,7 @@ import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import com.cruisetune.player.CruiseApplication
 import com.cruisetune.player.R
+import com.cruisetune.player.ui.Design.dp
 import com.cruisetune.player.core.Track
 import org.junit.Assert.*
 import org.junit.Test
@@ -92,6 +93,27 @@ class UiReviewFixesTest {
         activity.window.decorView.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY))
         activity.window.decorView.layout(0,0,width,height)
         shadowOf(Looper.getMainLooper()).idle()
+    }
+    @Test fun steeringSettingsPersistMappingsAndKeepLargeTouchTargets() {
+        val app = RuntimeEnvironment.getApplication() as CruiseApplication
+        val owner = Robolectric.buildActivity(MainActivity::class.java).create().start().resume().visible()
+        try {
+            ReflectionHelpers.callInstanceMethod<Unit>(owner.get(), "showSteeringSettings")
+            val dialog = ShadowDialog.getLatestDialog()
+            val buttons = views(dialog.window!!.decorView).filterIsInstance<TouchButton>().toList()
+            assertEquals(10, buttons.size)
+            assertTrue(buttons.all { it.minHeight >= owner.get().dp(76) })
+            assertFalse(com.cruisetune.player.steering.SteeringSettings(app.preferences).enabled)
+            buttons.first { it.text.toString() == "双击 · 不执行" }.performClick()
+            val choices = ShadowDialog.getLatestDialog()
+            views(choices.window!!.decorView).filterIsInstance<TouchButton>().single { it.text == "下一首" }.performClick()
+            assertTrue(buttons.any { it.text == "双击 · 下一首" && it.contentDescription.contains("下一首") })
+            assertEquals(com.cruisetune.player.steering.SteeringAction.NEXT,
+                com.cruisetune.player.steering.SteeringSettings(app.preferences).action(com.cruisetune.player.steering.SteeringKey.CENTER, com.cruisetune.player.steering.SteeringGesture.DOUBLE))
+            buttons.last().performClick()
+            assertFalse(buttons.any { it.text == "双击 · 下一首" })
+            dialog.dismiss()
+        } finally { owner.pause().stop().destroy() }
     }
     @Test fun coreControlsFitShortAndNarrowLandscapeAndLargeText() {
         for ((w,h,font) in listOf(Triple(640,360,1f),Triple(667,375,1f),Triple(853,480,1f),Triple(1280,720,1f),Triple(1920,1080,1f),Triple(640,360,1.6f),Triple(360,640,1f),Triple(360,640,1.6f))) {
