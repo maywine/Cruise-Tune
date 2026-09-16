@@ -1,0 +1,16 @@
+{
+  "src/main/java/androidx/media3/decoder/flac/FlacBinarySearchSeeker.java": "27fd33282fdefe0298f320842781f0939b4de3535c453aa42c28cf6e04fed272",
+  "src/main/java/androidx/media3/decoder/flac/FlacDecoder.java": "8d5b2abdd51cd89bf9f8500f516d4df6a6195d96c125396f1ac6e47931a7606b",
+  "src/main/java/androidx/media3/decoder/flac/FlacDecoderException.java": "7263a7a9849655a71563c234c85ba0860c88c409a5ca9146cf0bb4e2e45416ea",
+  "src/main/java/androidx/media3/decoder/flac/FlacDecoderJni.java": "d8001f7fa60a956dd626fb245d3c2286015d140c8978e4ba112dca1afc37b2db",
+  "src/main/java/androidx/media3/decoder/flac/FlacExtractor.java": "56568449e3307b4838fe125a7b3563145ef2fad81899e8b744997aed4fb7f5cb",
+  "src/main/java/androidx/media3/decoder/flac/FlacLibrary.java": "72608037bf5356734d7eabffd962e0ca15bbe09bc1730b74ffea5a0b7f01bc49",
+  "src/main/java/androidx/media3/decoder/flac/LibflacAudioRenderer.java": "aa0e366d7ddd98d4f0db91618414111a42f18fbef8b640100286e7bd59e99d07",
+  "src/main/java/androidx/media3/decoder/flac/package-info.java": "08eaee6709723cf34ed0d129f520cd6f65ef7222a10a92840460ce0d2f8b5580",
+  "src/main/jni/flac_jni.cc": "ee4892c707fde0152ac36160580364014227aeff1f17e33d8db3c7ca850aea86",
+  "src/main/jni/flac_parser.cc": "0914a0b08866ddc95e4cf114a47a46f3924e2897533cc85f6048748e4e282c0b",
+  "src/main/jni/include/data_source.h": "ec1561e097797a13db9d448f09175b364f71af7462600ee54dd09b854786d085",
+  "src/main/jni/include/flac_parser.h": "efbcf80e09b94ef7bd927f9842c9548dedb482e9f78b8dfee6d749a76068ac7f",
+  "LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+  "consumer-rules.pro": "a7805342d3e03e4fd80de81c65ab7b63759acb6610dd768a75b140d024997d1e"
+}

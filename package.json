@@ -1,0 +1,8 @@
+{
+  "name": "cruise-tune-assets",
+  "version": "0.5.2",
+  "private": true,
+  "description": "Reproducible launcher artwork for Cruise Tune",
+  "scripts": { "generate:icon": "node tools/generate-launcher-icon.cjs" },
+  "devDependencies": { "sharp": "0.35.4" }
+}

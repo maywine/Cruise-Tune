@@ -1,0 +1,36 @@
+name: Update release notes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/release-notes/**'
+      - 'tools/release.py'
+      - 'tools/update-release-notes.py'
+      - '.github/workflows/release-notes.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-notes
+  cancel-in-progress: false
+
+jobs:
+  publish-notes:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Check out versioned notes and release tags
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Update published release bodies
+        run: python3 tools/update-release-notes.py --write
+        env:
+          GH_TOKEN: ${{ github.token }}

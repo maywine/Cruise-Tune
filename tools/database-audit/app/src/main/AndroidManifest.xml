@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:label="Cruise Tune Database Audit" android:allowBackup="false" />
+    <instrumentation android:name=".AuditInstrumentation" android:targetPackage="com.cruisetune.player" android:label="Isolated database audit" android:functionalTest="true" />
+    <instrumentation android:name=".NetworkAuditInstrumentation" android:targetPackage="com.cruisetune.player" android:label="Read-only network audit" android:functionalTest="true" />
+    <instrumentation android:name=".TokenSetupInstrumentation" android:targetPackage="com.cruisetune.player" android:label="Explicit Token test setup" android:functionalTest="true" />
+    <instrumentation android:name=".StreamingProbeInstrumentation" android:targetPackage="com.cruisetune.player" android:label="Token streaming protocol probe" android:functionalTest="true" />
+    <instrumentation android:name=".SourceIdentityInstrumentation" android:targetPackage="com.cruisetune.player" android:label="Read-only source identity audit" android:functionalTest="true" />
+    <instrumentation android:name=".CacheCoverageInstrumentation" android:targetPackage="com.cruisetune.player" android:label="Cache coverage audit" android:functionalTest="true" />
+</manifest>

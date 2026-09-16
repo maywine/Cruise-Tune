@@ -1,0 +1,12 @@
+<resources>
+    <style name="Theme.CruiseTune" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#101418</item>
+        <item name="android:navigationBarColor">#101418</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">#101418</item>
+        <item name="colorAccent">#DDBB84</item>
+        <item name="android:windowSoftInputMode">adjustResize</item>
+    </style>
+</resources>
