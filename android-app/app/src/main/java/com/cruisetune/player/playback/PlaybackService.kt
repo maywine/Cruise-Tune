@@ -14,6 +14,7 @@ import com.cruisetune.player.core.*
 import com.cruisetune.player.ui.MainActivity
 import com.cruisetune.player.steering.SteeringAction
 import com.cruisetune.player.steering.SteeringController
+import com.cruisetune.player.dashboard.*
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
@@ -33,6 +34,7 @@ class PlaybackService : MediaLibraryService() {
         const val RETRY = "cruise.retry"
         const val REMOVE_SOURCE = "cruise.remove_source"
         const val DISCONNECT_TOKEN = "cruise.disconnect_token"
+        const val DASHBOARD_RECHECK = "cruise.dashboard_recheck"
     }
     private val app get() = application as CruiseApplication
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -54,6 +56,7 @@ class PlaybackService : MediaLibraryService() {
     private var screenOffObserved = false
     private lateinit var screenOff: ScreenOffMonitor
     private lateinit var steering: SteeringController
+    private lateinit var dashboard: DashboardSyncController
     private val ready = CompletableDeferred<Unit>()
     private var prefetchMessage: String? = null
     private var capacityMessage: String? = null
@@ -89,6 +92,8 @@ class PlaybackService : MediaLibraryService() {
         session = MediaLibrarySession.Builder(this, player, Callbacks()).setSessionActivity(activity).build()
         screenOff = ScreenOffMonitor(this, ::pauseForScreenOff)
         steering = SteeringController(this, scope, app.preferences, app.steeringStatus, execute = ::handleSteeringAction)
+        dashboard = DashboardSyncController(scope, DashboardSettings(app.preferences), app.preferences,
+            EcarxBroadcastTransport(this), app.dashboardStatus)
         diskScope.launch {
             for (write in writes) {
                 try {
@@ -104,7 +109,10 @@ class PlaybackService : MediaLibraryService() {
                 app.playbackMetadata.value=PlaybackMetadata.from(player)
                 val restartSelected = prepareAfterManualSeek && events.contains(Player.EVENT_POSITION_DISCONTINUITY)
                 if (events.contains(Player.EVENT_POSITION_DISCONTINUITY)) prepareAfterManualSeek = false
-                if (applying || !ready.isCompleted) return
+                if (applying || !ready.isCompleted) {
+                    if (applying) dashboard.invalidate("正在更新播放队列")
+                    return
+                }
                 // A terminal error leaves ExoPlayer IDLE. Seeking changes metadata but does not
                 // restart its loader, even if the next item is fully cached. Prepare after the
                 // seek/transition callbacks have cancelled the old recovery; retain pause intent.
@@ -119,8 +127,12 @@ class PlaybackService : MediaLibraryService() {
                 }
                 if (events.containsAny(Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_REPEAT_MODE_CHANGED, Player.EVENT_TIMELINE_CHANGED, Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED)) cancelPrefetch()
                 maybePrefetch()
+                syncDashboard()
             }
-            override fun onPlayerError(error: PlaybackException) { handlePlaybackFailure(error) }
+            override fun onPlayerError(error: PlaybackException) {
+                dashboard.invalidate("播放正在恢复，暂不更新仪表")
+                handlePlaybackFailure(error)
+            }
             override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
                 if (!automaticPlaybackChange && reason == Player.DISCONTINUITY_REASON_SEEK) {
                     cancelRecovery(); recoveryPolicy.reset()
@@ -165,6 +177,7 @@ class PlaybackService : MediaLibraryService() {
             // An OFF event may arrive while the saved queue is loading. Do not restore its old play intent.
             if (screenOffObserved || screenOff.isScreenOff()) pauseForScreenOff()
             updateExtras()
+            syncDashboard()
             while (isActive) {
                 delay(2000)
                 screenOff.checkNow()
@@ -176,10 +189,12 @@ class PlaybackService : MediaLibraryService() {
                         .forEach { app.media.downloadManager.setStopReason(it.request.id, 1) }
                 }
                 maybePrefetch()
+                syncDashboard(tick = true)
             }
         }
     }
     private fun pauseForScreenOff() {
+        if (::dashboard.isInitialized) dashboard.invalidate("屏幕已关闭，保持暂停")
         if (::steering.isInitialized) steering.cancelPending()
         screenOffObserved = true
         persistedIntent = false
@@ -197,6 +212,35 @@ class PlaybackService : MediaLibraryService() {
         screenOffObserved = false
         if (restartCurrent) PlaybackOperations.retry(player)
         else { player.prepare(); player.play() }
+    }
+    private fun syncDashboard(tick: Boolean = false) {
+        if (!::dashboard.isInitialized || !ready.isCompleted) return
+        val unavailable = when {
+            screenOffObserved || screenOff.isScreenOff() -> "屏幕已关闭，保持暂停"
+            player.playbackSuppressionReason != Player.PLAYBACK_SUPPRESSION_REASON_NONE -> "其他音频正在使用"
+            getSystemService(android.media.AudioManager::class.java).mode != android.media.AudioManager.MODE_NORMAL -> "通话或车机音频模式中"
+            player.playerError != null -> "播放正在恢复，暂不更新仪表"
+            player.playbackState == Player.STATE_IDLE -> "等待歌曲准备"
+            else -> null
+        }
+        if (unavailable != null) { dashboard.invalidate(unavailable); return }
+        val track = entries.getOrNull(player.currentMediaItemIndex)?.track
+        if (track == null || player.currentMediaItem?.mediaId != track.id) {
+            dashboard.invalidate("等待当前歌曲")
+            return
+        }
+        val metadata = app.playbackMetadata.value.forTrack(track.id)?.mediaMetadata
+        val title = metadata?.title?.toString().orEmpty().ifBlank { track.title }
+        val artist = metadata?.artist?.toString().orEmpty()
+        val album = metadata?.albumTitle?.toString().orEmpty()
+        val duration = player.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: track.durationMs.takeIf { it > 0 }
+        val state = when {
+            player.isPlaying -> DashboardPlaybackState.PLAYING
+            player.playWhenReady && player.playbackState == Player.STATE_BUFFERING -> DashboardPlaybackState.BUFFERING
+            else -> DashboardPlaybackState.PAUSED
+        }
+        dashboard.onPlayback(DashboardInput(DashboardSnapshot(track.id, packageName, title, artist, album, state,
+            duration, player.currentPosition.coerceAtLeast(0))), tick)
     }
     private fun handleSteeringAction(action: SteeringAction, valid: () -> Boolean) {
         // Never replay key presses collected during startup or a long-running queue update.
@@ -503,6 +547,7 @@ class PlaybackService : MediaLibraryService() {
     }
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession = session
     override fun onDestroy() {
+        if (::dashboard.isInitialized) dashboard.close()
         steering.close()
         screenOff.stop()
         cancelRecovery()
@@ -524,7 +569,7 @@ class PlaybackService : MediaLibraryService() {
         }
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
             val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
-            if (controller.packageName == packageName) listOf(PLAY_TRACK, SHUFFLE, SORT_QUEUE, RESUME_ON_OPEN, RETRY, REMOVE_SOURCE, DISCONNECT_TOKEN).forEach { commands.add(SessionCommand(it, Bundle.EMPTY)) }
+            if (controller.packageName == packageName) listOf(PLAY_TRACK, SHUFFLE, SORT_QUEUE, RESUME_ON_OPEN, RETRY, REMOVE_SOURCE, DISCONNECT_TOKEN, DASHBOARD_RECHECK).forEach { commands.add(SessionCommand(it, Bundle.EMPTY)) }
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session).setAvailableSessionCommands(commands.build())
                 .setAvailablePlayerCommands(Player.Commands.Builder().addAllCommands().remove(Player.COMMAND_CHANGE_MEDIA_ITEMS).build()).build()
         }
@@ -550,6 +595,7 @@ class PlaybackService : MediaLibraryService() {
                         updateExtras("已清除本机 Token 授权")
                     }
                     RETRY -> { cancelRecovery(); recoveryPolicy.reset(); cancelPrefetch(); prepareAndPlay(restartCurrent = true); updateExtras() }
+                    DASHBOARD_RECHECK -> dashboard.requestResend()
                     else -> return@future SessionResult(SessionError.ERROR_NOT_SUPPORTED)
                 }
                 SessionResult(SessionResult.RESULT_SUCCESS)

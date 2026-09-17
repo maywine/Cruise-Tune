@@ -10,6 +10,7 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <queries>
         <package android:name="com.geely.service.oneosapi" />
+        <package android:name="com.geely.online.service" />
     </queries>
     <application
         android:name=".CruiseApplication"
