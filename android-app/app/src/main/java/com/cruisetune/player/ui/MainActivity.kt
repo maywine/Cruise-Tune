@@ -42,6 +42,7 @@ import com.cruisetune.player.data.LibraryState
 import com.cruisetune.player.data.JsonCodec
 import com.cruisetune.player.playback.PlaybackService
 import com.cruisetune.player.steering.*
+import com.cruisetune.player.dashboard.*
 import com.cruisetune.player.ui.Design.dp
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.*
@@ -901,7 +902,9 @@ class MainActivity : CruiseActivity() {
         action(content,"封面与歌词") { dialog.dismiss();showTrackDetails() }
         toggle(content, "打开应用时继续播放", "resumeOnOpen", false)
         paragraph(content, "熄屏时自动暂停并保存进度，亮屏后点击继续播放。")
+        section(content,"车辆")
         action(content, "方向盘按键") { dialog.dismiss(); showSteeringSettings() }
+        action(content, "仪表媒体显示") { dialog.dismiss(); showDashboardSettings() }
         section(content,"缓存与离线")
         toggle(content, "自动缓存后 3 首", "prefetchNextTracks", true)
         paragraph(content, "按播放顺序缓存后 3 首完整歌曲，所有网络均可使用；网络中断后持续重试。")
@@ -1016,6 +1019,44 @@ class MainActivity : CruiseActivity() {
                     reconnect.isEnabled = settings.enabled
                     status.text = listOf(value.connection, value.detail, value.menu, value.lastEvent,
                         "系统媒体键：${value.standardEvents} 次", value.lastAction).filter { it.isNotBlank() }.joinToString("\n")
+                }
+            }
+        }
+        dialog.setOnDismissListener { observe.cancel() }
+        showPanel(dialog)
+    }
+    private fun showDashboardSettings() {
+        val settings = DashboardSettings(app.preferences)
+        val (dialog, content) = panel("仪表媒体显示")
+        paragraph(content, "播放 Cruise Tune 时向原车媒体服务发送歌曲信息。请在仪表切到媒体菜单确认显示；“已发送”不代表已收到仪表回执。")
+        val enabled = CalmSwitch(this).apply {
+            text = "同步到原车仪表"; textSize = 21f; setTextColor(Design.text); minHeight = dp(84)
+            contentDescription = "同步到原车仪表"
+            isChecked = settings.enabled
+            setOnCheckedChangeListener { _, checked -> settings.setEnabled(checked) }
+        }
+        content.addView(enabled, LinearLayout.LayoutParams(-1, -2))
+        val status = Design.label(this, "", 20f, Design.secondary).apply {
+            setLineSpacing(dp(5).toFloat(), 1f)
+            contentDescription = "仪表媒体同步状态"
+        }
+        content.addView(status, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12); bottomMargin = dp(8) })
+        val recheck = action(content, "重新检查并发送") { command(PlaybackService.DASHBOARD_RECHECK) }
+        action(content, "复制诊断信息") {
+            val version = packageManager.getPackageInfo(packageName, 0).versionName.orEmpty()
+            val report = app.dashboardStatus.value.diagnosticReport(version, Build.VERSION.SDK_INT)
+            getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(
+                android.content.ClipData.newPlainText("Cruise Tune 仪表媒体诊断", report)
+            )
+            toast("诊断已复制，可粘贴发送")
+        }
+        paragraph(content, "关闭后立即停止新的同步。网络缓存、播放重试和方向盘按键不受此开关影响。封面同步将在文字与状态完成实车验证后再提供。")
+        val observe = lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                app.dashboardStatus.collect { value ->
+                    status.text = "${value.detail}\n本机已发送 ${value.sentCount} 次；需在仪表确认"
+                    recheck.isEnabled = value.enabled && value.kind != DashboardStatusKind.CHECKING
+                    enabled.contentDescription = "同步到原车仪表，${if (enabled.isChecked) "已开启" else "已关闭"}"
                 }
             }
         }
