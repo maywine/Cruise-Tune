@@ -6,7 +6,7 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 
-internal enum class DashboardEndpointKind { READY, MISSING, DISABLED, NOT_EXPORTED, NOT_SYSTEM, PERMISSION_DENIED }
+internal enum class DashboardEndpointKind { READY, MISSING, ACTION_MISMATCH, DISABLED, NOT_EXPORTED, NOT_SYSTEM, PERMISSION_DENIED }
 
 internal data class DashboardEndpoint(
     val kind: DashboardEndpointKind,
@@ -49,6 +49,12 @@ internal class EcarxBroadcastTransport(private val context: Context) : Dashboard
         }
         val version = runCatching { manager.getPackageInfo(TARGET_PACKAGE, 0).versionName }.getOrNull()
         val system = application.flags and (ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+        val matchingReceivers = manager.queryBroadcastReceivers(
+            Intent(ACTION).setComponent(component), PackageManager.GET_RESOLVED_FILTER,
+        )
+        if (matchingReceivers.none { it.activityInfo?.name == component.className }) {
+            return DashboardEndpoint(DashboardEndpointKind.ACTION_MISMATCH, "原车媒体服务未声明兼容的广播 action", version, application.uid, system)
+        }
         if (!application.enabled || !receiver.enabled) return DashboardEndpoint(DashboardEndpointKind.DISABLED, "原车媒体服务已停用", version, application.uid, system)
         if (!receiver.exported) return DashboardEndpoint(DashboardEndpointKind.NOT_EXPORTED, "原车媒体服务不允许外部调用", version, application.uid, system)
         if (!system) return DashboardEndpoint(DashboardEndpointKind.NOT_SYSTEM, "目标媒体服务不是已验证的系统应用", version, application.uid, system)

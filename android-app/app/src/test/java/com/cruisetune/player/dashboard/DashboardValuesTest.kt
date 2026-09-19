@@ -13,12 +13,12 @@ class DashboardValuesTest {
 
     @Test fun textAndTimeFieldsAreSafeForTheReceiverContract() {
         assertEquals("A B", DashboardValues.text("A\u0000 B"))
-        assertEquals(0, DashboardValues.duration(null))
-        assertEquals(0, DashboardValues.duration(-1))
-        assertEquals(Int.MAX_VALUE, DashboardValues.duration(Long.MAX_VALUE))
-        assertEquals(0, DashboardValues.position(-4, 1000))
-        assertEquals(1000, DashboardValues.position(5000, 1000))
-        assertEquals(Int.MAX_VALUE, DashboardValues.position(Long.MAX_VALUE, 0))
+        assertEquals(0L, DashboardValues.duration(null))
+        assertEquals(0L, DashboardValues.duration(-1))
+        assertEquals(Long.MAX_VALUE, DashboardValues.duration(Long.MAX_VALUE))
+        assertEquals(0L, DashboardValues.position(-4, 1000))
+        assertEquals(1000L, DashboardValues.position(5000, 1000))
+        assertEquals(Long.MAX_VALUE, DashboardValues.position(Long.MAX_VALUE, 0))
         assertEquals(256, DashboardValues.text("🎵".repeat(300)).codePointCount(0, DashboardValues.text("🎵".repeat(300)).length))
     }
 }

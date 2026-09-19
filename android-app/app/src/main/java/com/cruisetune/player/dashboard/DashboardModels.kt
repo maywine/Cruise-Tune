@@ -41,17 +41,16 @@ internal object DashboardValues {
         return output.toString()
     }
 
-    fun duration(value: Long?): Int = when {
-        value == null || value <= 0 -> 0
-        value >= Int.MAX_VALUE -> Int.MAX_VALUE
-        else -> value.toInt()
+    fun duration(value: Long?): Long = when {
+        value == null || value <= 0 -> 0L
+        else -> value
     }
 
-    fun position(value: Long, duration: Int): Int {
+    fun position(value: Long, duration: Long): Long {
         val safe = value.coerceAtLeast(0).let { position ->
-            if (duration > 0) position.coerceAtMost(duration.toLong()) else position
+            if (duration > 0) position.coerceAtMost(duration) else position
         }
-        return safe.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        return safe
     }
 
     /** Deterministic positive 64-bit ID; it never exposes a cloud file ID. */

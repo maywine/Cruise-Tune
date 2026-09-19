@@ -55,8 +55,28 @@ class DashboardSyncControllerTest {
         controller.onPlayback(DashboardInput(snapshot(DashboardPlaybackState.PLAYING, 4_000), invalidated = true, invalidationReason = "熄屏"), tick = true)
         advanceTimeBy(2_000)
         advanceUntilIdle()
-        assertEquals(1, transport.sent.size)
+        assertEquals(2, transport.sent.size)
+        assertEquals(2, transport.sent.last().getIntExtra("RECEIVER_MEDIA_PLAY_STATUS", -1))
         assertEquals(DashboardStatusKind.WAITING, status.value.kind)
+        controller.close()
+    }
+
+    @Test fun disablingSyncClearsTheLastPlayingState() = runTest {
+        val context = RuntimeEnvironment.getApplication() as Application
+        val preferences = context.getSharedPreferences("dashboard-disable", Context.MODE_PRIVATE).apply {
+            edit().clear().putBoolean(DashboardSettings.ENABLED, true).commit()
+        }
+        val transport = FakeTransport()
+        val status = MutableStateFlow(DashboardStatus())
+        val controller = DashboardSyncController(this, DashboardSettings(preferences), preferences, transport, status,
+            elapsedMs = { testScheduler.currentTime }, ioDispatcher = StandardTestDispatcher(testScheduler))
+        advanceUntilIdle()
+        controller.onPlayback(DashboardInput(snapshot(DashboardPlaybackState.PLAYING)))
+        advanceTimeBy(200); advanceUntilIdle()
+        preferences.edit().putBoolean(DashboardSettings.ENABLED, false).commit()
+        advanceUntilIdle()
+        assertEquals(listOf(3, 2), transport.sent.map { it.getIntExtra("RECEIVER_MEDIA_PLAY_STATUS", -1) })
+        assertEquals(DashboardStatusKind.DISABLED, status.value.kind)
         controller.close()
     }
 

@@ -24,20 +24,17 @@ class EcarxMediaPayloadTest {
         assertTrue(intent.flags and Intent.FLAG_INCLUDE_STOPPED_PACKAGES != 0)
         assertEquals("日落 - 孙燕姿", intent.getStringExtra("RECEIVER_MEDIA_BOOK_NAME"))
         assertEquals(3, intent.getIntExtra("RECEIVER_MEDIA_PLAY_STATUS", -1))
-        assertEquals(Int.MAX_VALUE, intent.getIntExtra("RECEIVER_MEDIA_TOTAL_DURATION", -1))
-        assertEquals(Int.MAX_VALUE, intent.getIntExtra("RECEIVER_MEDIA_CURRENT_POSITION", -1))
+        assertEquals(Long.MAX_VALUE, intent.getLongExtra("RECEIVER_MEDIA_TOTAL_DURATION", -1L))
+        assertEquals(Long.MAX_VALUE, intent.getLongExtra("RECEIVER_MEDIA_CURRENT_POSITION", -1L))
         assertTrue(intent.extras!!.get("RECEIVER_MEDIA_BOOK_ID") is Long)
-        assertTrue(intent.extras!!.get("RECEIVER_MEDIA_TOTAL_DURATION") is Int)
-        assertTrue(intent.extras!!.get("RECEIVER_MEDIA_CURRENT_POSITION") is Int)
+        assertTrue(intent.extras!!.get("RECEIVER_MEDIA_TOTAL_DURATION") is Long)
+        assertTrue(intent.extras!!.get("RECEIVER_MEDIA_CURRENT_POSITION") is Long)
         assertEquals("", intent.getStringExtra("RECEIVER_MEDIA_BOOK_COVERURL"))
-        assertEquals(intent.getStringExtra("mediaId"), intent.getStringExtra("trackId"))
-        assertFalse(intent.getStringExtra("trackId")!!.contains("cloud-track-42"))
+        assertNull(intent.extras!!.get("trackId"))
     }
 
     @Test fun pausedPayloadKeepsMetadataButUsesTheConfirmedPausedValue() {
         val intent = EcarxMediaPayload.intent(snapshot(DashboardPlaybackState.PAUSED))
         assertEquals(2, intent.getIntExtra("RECEIVER_MEDIA_PLAY_STATUS", -1))
-        assertFalse(intent.getBooleanExtra("isPlaying", true))
-        assertEquals("paused", intent.getStringExtra("playbackState"))
     }
 }
