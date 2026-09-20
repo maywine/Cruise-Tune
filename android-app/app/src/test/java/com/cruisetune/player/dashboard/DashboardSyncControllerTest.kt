@@ -68,8 +68,10 @@ class DashboardSyncControllerTest {
         }
         val transport = FakeTransport()
         val status = MutableStateFlow(DashboardStatus())
+        var disabledCount = 0
         val controller = DashboardSyncController(this, DashboardSettings(preferences), preferences, transport, status,
-            elapsedMs = { testScheduler.currentTime }, ioDispatcher = StandardTestDispatcher(testScheduler))
+            elapsedMs = { testScheduler.currentTime }, ioDispatcher = StandardTestDispatcher(testScheduler),
+            onDisabled = { disabledCount++ })
         advanceUntilIdle()
         controller.onPlayback(DashboardInput(snapshot(DashboardPlaybackState.PLAYING)))
         advanceTimeBy(200); advanceUntilIdle()
@@ -77,6 +79,7 @@ class DashboardSyncControllerTest {
         advanceUntilIdle()
         assertEquals(listOf(3, 2), transport.sent.map { it.getIntExtra("RECEIVER_MEDIA_PLAY_STATUS", -1) })
         assertEquals(DashboardStatusKind.DISABLED, status.value.kind)
+        assertEquals(1, disabledCount)
         controller.close()
     }
 
