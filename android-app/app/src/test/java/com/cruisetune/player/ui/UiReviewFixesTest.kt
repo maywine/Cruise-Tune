@@ -11,6 +11,7 @@ import com.cruisetune.player.CruiseApplication
 import com.cruisetune.player.R
 import com.cruisetune.player.ui.Design.dp
 import com.cruisetune.player.core.Track
+import com.cruisetune.player.startup.StartupSettings
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.Before
@@ -343,6 +344,23 @@ class UiReviewFixesTest {
             val reduced=views(dialog.window!!.decorView).filterIsInstance<CalmSwitch>().first{it.text.toString()=="减少动态效果"}
             reduced.isChecked=true;shadowOf(Looper.getMainLooper()).idle();assertEquals(0,dialog.window!!.attributes.windowAnimations)
         } finally {controller.pause().stop().destroy()}
+    }
+    @Test fun startupSettingIsVisibleAndPersists() {
+        val app = RuntimeEnvironment.getApplication() as CruiseApplication
+        app.preferences.edit().remove(StartupSettings.ENABLED).commit()
+        val controller = Robolectric.buildActivity(MainActivity::class.java).create().start().resume().visible()
+        try {
+            val activity = controller.get()
+            views(activity.window.decorView).filterIsInstance<TouchButton>().first { it.text.toString() == "设置" }.performClick()
+            val dialog = ShadowDialog.getLatestDialog()
+            val startup = views(dialog.window!!.decorView).filterIsInstance<CalmSwitch>().single { it.text.toString() == "开机启动应用" }
+            assertFalse(startup.isChecked)
+            startup.isChecked = true
+            assertTrue(StartupSettings(app.preferences).enabled)
+        } finally {
+            app.preferences.edit().remove(StartupSettings.ENABLED).commit()
+            controller.pause().stop().destroy()
+        }
     }
     @Test fun existingMusicDirectoriesPrecedeAccountAndLoginActions() {
         val controller=Robolectric.buildActivity(MainActivity::class.java).create().start().resume().visible()

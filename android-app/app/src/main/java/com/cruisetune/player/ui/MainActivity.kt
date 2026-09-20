@@ -43,6 +43,7 @@ import com.cruisetune.player.data.JsonCodec
 import com.cruisetune.player.playback.PlaybackService
 import com.cruisetune.player.steering.*
 import com.cruisetune.player.dashboard.*
+import com.cruisetune.player.startup.StartupSettings
 import com.cruisetune.player.ui.Design.dp
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.*
@@ -902,6 +903,9 @@ class MainActivity : CruiseActivity() {
         action(content,"封面与歌词") { dialog.dismiss();showTrackDetails() }
         toggle(content, "打开应用时继续播放", "resumeOnOpen", false)
         paragraph(content, "熄屏时自动暂停并保存进度，亮屏后点击继续播放。")
+        section(content,"启动")
+        toggle(content, "开机启动应用", StartupSettings.ENABLED, false)
+        paragraph(content, "设备开机完成后打开 Cruise Tune；是否自动继续播放仍由上面的播放开关决定。")
         section(content,"车辆")
         action(content, "方向盘按键") { dialog.dismiss(); showSteeringSettings() }
         action(content, "仪表媒体显示") { dialog.dismiss(); showDashboardSettings() }
