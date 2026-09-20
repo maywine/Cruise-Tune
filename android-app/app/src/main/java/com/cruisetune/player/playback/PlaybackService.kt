@@ -56,7 +56,9 @@ class PlaybackService : MediaLibraryService() {
     private var screenOffObserved = false
     private lateinit var screenOff: ScreenOffMonitor
     private lateinit var steering: SteeringController
+    private lateinit var dashboardSettings: DashboardSettings
     private lateinit var dashboard: DashboardSyncController
+    private lateinit var dashboardCovers: com.cruisetune.player.dashboard.DashboardCoverStore
     private val ready = CompletableDeferred<Unit>()
     private var prefetchMessage: String? = null
     private var capacityMessage: String? = null
@@ -73,6 +75,10 @@ class PlaybackService : MediaLibraryService() {
     private var prepareAfterManualSeek = false
     private var recoveryNotice: String? = null
     private var clearRecoveryNoticeOnProgress = false
+    private var coverJob: Job? = null
+    private var coverTrackId: String? = null
+    private var coverSource: ByteArray? = null
+    private var coverUri: String? = null
     private val prefetch by lazy { LookAheadPrefetch(scope, app.media::isPrefetchComplete, app.media::prefetchAttempt,
         android.os.SystemClock::elapsedRealtime, report = { message ->
             if (message != prefetchMessage) { prefetchMessage = message; updateExtras() }
@@ -92,8 +98,10 @@ class PlaybackService : MediaLibraryService() {
         session = MediaLibrarySession.Builder(this, player, Callbacks()).setSessionActivity(activity).build()
         screenOff = ScreenOffMonitor(this, ::pauseForScreenOff)
         steering = SteeringController(this, scope, app.preferences, app.steeringStatus, execute = ::handleSteeringAction)
-        dashboard = DashboardSyncController(scope, DashboardSettings(app.preferences), app.preferences,
-            EcarxBroadcastTransport(this), app.dashboardStatus)
+        dashboardSettings = DashboardSettings(app.preferences)
+        dashboardCovers = com.cruisetune.player.dashboard.DashboardCoverStore(this, scope)
+        dashboard = DashboardSyncController(scope, dashboardSettings, app.preferences,
+            EcarxBroadcastTransport(this), app.dashboardStatus, onDisabled = ::stopDashboardCovers)
         diskScope.launch {
             for (write in writes) {
                 try {
@@ -215,6 +223,10 @@ class PlaybackService : MediaLibraryService() {
     }
     private fun syncDashboard(tick: Boolean = false) {
         if (!::dashboard.isInitialized || !ready.isCompleted) return
+        if (!dashboardSettings.enabled) {
+            stopDashboardCovers()
+            return
+        }
         val unavailable = when {
             screenOffObserved || screenOff.isScreenOff() -> "屏幕已关闭，保持暂停"
             player.playbackSuppressionReason != Player.PLAYBACK_SUPPRESSION_REASON_NONE -> "其他音频正在使用"
@@ -230,6 +242,7 @@ class PlaybackService : MediaLibraryService() {
             return
         }
         val metadata = app.playbackMetadata.value.forTrack(track.id)?.mediaMetadata
+        prepareDashboardCover(track.id, metadata?.artworkData)
         val title = metadata?.title?.toString().orEmpty().ifBlank { track.title }
         val artist = metadata?.artist?.toString().orEmpty()
         val album = metadata?.albumTitle?.toString().orEmpty()
@@ -240,7 +253,37 @@ class PlaybackService : MediaLibraryService() {
             else -> DashboardPlaybackState.PAUSED
         }
         dashboard.onPlayback(DashboardInput(DashboardSnapshot(track.id, packageName, title, artist, album, state,
-            duration, player.currentPosition.coerceAtLeast(0))), tick)
+            duration, player.currentPosition.coerceAtLeast(0), coverUri)), tick)
+    }
+    private fun prepareDashboardCover(trackId: String, artwork: ByteArray?) {
+        if (artwork == null) {
+            if (coverTrackId != trackId) {
+                coverJob?.cancel(); coverJob = null
+                coverTrackId = trackId; coverSource = null; coverUri = null
+            }
+            return
+        }
+        if (coverTrackId == trackId && coverSource === artwork) return
+        coverJob?.cancel()
+        coverTrackId = trackId
+        coverSource = artwork
+        coverUri = null
+        val sourceKey = "$trackId:${artwork.size}:${artwork.contentHashCode()}"
+        coverJob = scope.launch {
+            val prepared = dashboardCovers.prepare(trackId, artwork, sourceKey)
+            if (coverTrackId == trackId && coverSource === artwork && prepared != null) {
+                coverUri = prepared.uri
+                syncDashboard()
+            }
+        }
+    }
+    private fun stopDashboardCovers() {
+        coverJob?.cancel()
+        coverJob = null
+        coverTrackId = null
+        coverSource = null
+        coverUri = null
+        if (::dashboardCovers.isInitialized) dashboardCovers.stop()
     }
     private fun handleSteeringAction(action: SteeringAction, valid: () -> Boolean) {
         // Never replay key presses collected during startup or a long-running queue update.
@@ -548,6 +591,8 @@ class PlaybackService : MediaLibraryService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession = session
     override fun onDestroy() {
         if (::dashboard.isInitialized) dashboard.close()
+        stopDashboardCovers()
+        if (::dashboardCovers.isInitialized) dashboardCovers.close()
         steering.close()
         screenOff.stop()
         cancelRecovery()

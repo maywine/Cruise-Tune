@@ -25,6 +25,7 @@ internal object EcarxMediaPayload {
                 putExtra("RECEIVER_MEDIA_BOOK_NAME", title)
                 putExtra("RECEIVER_MEDIA_BOOK_AUTHOR_NAME", artist)
                 putExtra("RECEIVER_MEDIA_BOOK_COVERURL", snapshot.coverUri.orEmpty())
+                putExtra("RECEIVER_MEDIA_COVER_URL", snapshot.coverUri.orEmpty())
                 putExtra("RECEIVER_MEDIA_TOTAL_DURATION", duration)
                 putExtra("RECEIVER_MEDIA_CURRENT_POSITION", position)
             }

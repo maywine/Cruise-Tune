@@ -24,6 +24,7 @@ internal class DashboardSyncController(
     private val status: MutableStateFlow<DashboardStatus>,
     private val elapsedMs: () -> Long = SystemClock::elapsedRealtime,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val onDisabled: () -> Unit = {},
 ) {
     private data class Pending(val epoch: Long, val snapshot: DashboardSnapshot, val clear: Boolean = false)
 
@@ -52,7 +53,10 @@ internal class DashboardSyncController(
     init {
         preferences.registerOnSharedPreferenceChangeListener(changed)
         if (settings.enabled) refreshEndpoint()
-        else update(DashboardStatusKind.DISABLED, "未开启仪表媒体显示")
+        else {
+            onDisabled()
+            update(DashboardStatusKind.DISABLED, "未开启仪表媒体显示")
+        }
     }
 
     fun onPlayback(input: DashboardInput, tick: Boolean = false) {
@@ -128,6 +132,7 @@ internal class DashboardSyncController(
     private fun onSettingChanged() {
         if (closed) return
         if (!settings.enabled) {
+            onDisabled()
             invalidate("仪表媒体显示已关闭", allowWhenDisabled = true)
             if (!clearRequested && inFlight?.clear != true) endpoint = null
             update(DashboardStatusKind.DISABLED, "未开启仪表媒体显示")
