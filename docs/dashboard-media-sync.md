@@ -11,7 +11,6 @@
 - `DashboardSnapshot`：从播放线程当前状态生成的不可变快照，包含曲目 ID、来源包名、标题、歌手、专辑、播放状态、时长、位置和封面地址。
 - `DashboardSyncPolicy`：只负责本地状态机，区分开始播放、切歌、缓冲、暂停和失效；不会推断仪表是否真的显示。
 - `DashboardSyncController`：串行化接收器检查、状态发布、节流、重试和失效清理。所有远端调用在 IO dispatcher 执行，状态回到播放服务所属作用域更新。
-- `DashboardCoverStore`：从 Media3 的 `artworkData` 生成受限 JPEG，API 28 提供 file URI，API 29+ 提供带版本参数的回环 HTTP URI。
 - `DashboardTransport`：定义接收器检查和广播发送接口，便于单元测试和后续替换实现。
 - `EcarxBroadcastTransport`：访问已配置的 Ecarx 媒体接收器，并检查包、组件、action、导出属性、系统应用身份和接收器权限。
 - `EcarxMediaPayload`：生成接收器所需的最小字段集合，并统一清理文本、限制位置和保持数值类型。
@@ -54,9 +53,7 @@
 
 时长和位置使用 `Long`，负数归零，位置在已知时长时不会超过时长。文本去除控制字符并限制为 256 个 Unicode code point。媒体 ID 是由来源包名和曲目 ID 生成的稳定正数，不把云端文件 ID 或临时下载地址写入仪表字段。
 
-`RECEIVER_MEDIA_BOOK_COVERURL` 和兼容别名 `RECEIVER_MEDIA_COVER_URL` 使用当前歌曲的封面 URI；没有可用封面时保持为空，不把上一首封面带到新歌。封面从 `MediaMetadata.artworkData` 提取，缩放到最长边 320px，JPEG 输出限制在 512 KiB，文件以内容摘要命名并原子替换，旧文件最多保留 6 个。
-
-Android 9/API 28 使用 `file:///.../xiaoba_covers/cover_<hash>.jpg`；Android 10/API 29 及以上使用 `http://127.0.0.1:9090/cover_<hash>.jpg?v=<hash>`。文件准备完成后，播放服务用同一曲目再次发送媒体广播；晚到的封面结果必须匹配曲目和 artwork 引用，不能覆盖切歌后的状态。实车仍需确认接收端能读取两种地址。
+封面地址目前保留为空。封面文件服务器、Content URI 授权和封面更新时序需要单独完成实车验证后再开放。
 
 ## 播放生命周期
 
@@ -120,8 +117,9 @@ cd android-app
 `authCheck` 设备测试可验证播放服务、队列和生命周期，但模拟器没有 OneOS/Ecarx 原车服务，不能证明真实仪表收到广播。真实车机仍需检查：仪表媒体菜单、切歌顺序、暂停清理、熄屏、通话音频焦点、休眠唤醒和覆盖安装后的接收器权限。
 
 ## 当前限制
+
 - 没有仪表回执时，发送成功不能等同于显示成功；
 - 接收器字段和播放状态值属于当前兼容配置，跨车型、跨固件前必须重新核对；
-- 仪表封面依赖目标接收端能读取受限 file URI 或回环 HTTP 地址；若固件拒绝该地址，保留文字、状态和进度同步；
+- 封面同步尚未开放；
 - 不包含真实车机账号、VIN、设备标识或运行日志；
 - 不依赖第三方实现中的加固库、特权权限或白名单写入逻辑。
