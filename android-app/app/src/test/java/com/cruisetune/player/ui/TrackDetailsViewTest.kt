@@ -6,6 +6,7 @@ import android.os.Looper
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.TextView
+import androidx.media3.common.Player
 import com.cruisetune.player.R
 import com.cruisetune.player.core.*
 import org.junit.Assert.*
@@ -21,26 +22,38 @@ import java.time.Duration
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[28],application=Application::class,manifest=Config.NONE)
 class TrackDetailsViewTest {
-    @Test fun orderToggleSitsBetweenLyricsAndOfflineAndReportsTheActualMode() {
+    @Test fun secondaryTogglesReportOrderAndQueueLoopModes() {
         var changes=0
-        val view=TrackDetailsView(RuntimeEnvironment.getApplication(),{}, {}, { changes++ })
+        var repeatChanges=0
+        val view=TrackDetailsView(RuntimeEnvironment.getApplication(),{}, {}, { changes++ }, { repeatChanges++ })
         val order=view.findViewById<TouchButton>(R.id.player_order_toggle)
+        val repeat=view.findViewById<TouchButton>(R.id.player_repeat_toggle)
         val actions=order.parent as android.view.ViewGroup
-        assertEquals(listOf(R.id.player_lyrics_toggle,R.id.player_order_toggle,R.id.player_offline),
+        assertEquals(listOf(R.id.player_lyrics_toggle,R.id.player_order_toggle,R.id.player_repeat_toggle,R.id.player_offline),
             (0 until actions.childCount).map { actions.getChildAt(it).id })
         view.updateOrder(false,true)
         assertEquals("顺序",order.text.toString());assertFalse(order.isSelected);assertTrue(order.isEnabled)
+        view.updateRepeat(Player.REPEAT_MODE_OFF,true)
+        assertFalse(repeat.isSelected);assertTrue(repeat.isEnabled)
         order.performClick();assertEquals(1,changes)
+        repeat.performClick();assertEquals(1,repeatChanges)
         view.updateOrder(true,true)
         assertEquals("随机",order.text.toString());assertTrue(order.isSelected)
         assertTrue(order.contentDescription.toString().contains("切换为顺序"))
+        view.updateRepeat(Player.REPEAT_MODE_ALL,true)
+        assertTrue(repeat.isSelected);assertTrue(repeat.contentDescription.toString().contains("关闭列表循环"))
+        view.updateRepeat(Player.REPEAT_MODE_ALL,true,true)
+        assertEquals("循环",repeat.text.toString());assertTrue(repeat.isEnabled)
+        assertTrue(repeat.contentDescription.toString().contains("取消切换"))
         view.updateOrder(true,true,true)
         assertEquals("切换",order.text.toString());assertFalse(order.isEnabled)
         view.updateOrder(false,false)
         assertEquals("顺序",order.text.toString());assertFalse(order.isEnabled)
+        view.updateRepeat(Player.REPEAT_MODE_OFF,false)
+        assertFalse(repeat.isEnabled)
     }
     @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
-    @Test fun threeSecondaryButtonsRemainReadableAndStableWithLargeText() {
+    @Test fun secondaryButtonsRemainReadableAndStableWithLargeText() {
         for((width,font) in listOf(403 to 1f,300 to 1f,296 to 1.6f,300 to 1.6f,312 to 1.6f)) {
             RuntimeEnvironment.setQualifiers("mdpi");RuntimeEnvironment.setFontScale(font)
             val view=TrackDetailsView(RuntimeEnvironment.getApplication(),{}, {}, {})
@@ -48,9 +61,10 @@ class TrackDetailsViewTest {
             for((shuffled,busy) in listOf(false to false,true to false,true to true)) {
                 view.update(null,null,false,LyricsState(),0,true,OfflineState.AVAILABLE,"在线")
                 view.updateOrder(shuffled,true,busy)
+                view.updateRepeat(if(shuffled) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF,true)
                 view.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(280,View.MeasureSpec.EXACTLY))
                 view.layout(0,0,width,280)
-                val bounds=listOf(R.id.player_lyrics_toggle,R.id.player_order_toggle,R.id.player_offline).map { id ->
+                val bounds=listOf(R.id.player_lyrics_toggle,R.id.player_order_toggle,R.id.player_repeat_toggle,R.id.player_offline).map { id ->
                     val button=view.findViewById<TextView>(id)
                     assertTrue("Touch width at $width / $font",button.width>=48)
                     assertTrue("Touch height at $width / $font",button.height>=48)
@@ -60,7 +74,7 @@ class TrackDetailsViewTest {
                     android.graphics.Rect(button.left,button.top,button.right,button.bottom)
                 }
                 if(original==null)original=bounds else assertEquals("State changes must not move the row",original,bounds)
-                assertTrue(bounds[0].right<bounds[1].left && bounds[1].right<bounds[2].left)
+                assertTrue(bounds[0].right<bounds[1].left && bounds[1].right<bounds[2].left && bounds[2].right<bounds[3].left)
             }
         }
     }

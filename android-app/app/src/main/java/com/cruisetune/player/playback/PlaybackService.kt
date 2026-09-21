@@ -177,7 +177,7 @@ class PlaybackService : MediaLibraryService() {
             // An OFF event may arrive while the saved queue is loading. Do not restore its old play intent.
             if (screenOffObserved || screenOff.isScreenOff()) pauseForScreenOff()
             updateExtras()
-            syncDashboard()
+            syncDashboard(pending = entries.isNotEmpty())
             while (isActive) {
                 delay(2000)
                 screenOff.checkNow()
@@ -213,14 +213,14 @@ class PlaybackService : MediaLibraryService() {
         if (restartCurrent) PlaybackOperations.retry(player)
         else { player.prepare(); player.play() }
     }
-    private fun syncDashboard(tick: Boolean = false) {
+    private fun syncDashboard(tick: Boolean = false, pending: Boolean = false) {
         if (!::dashboard.isInitialized || !ready.isCompleted) return
         val unavailable = when {
             screenOffObserved || screenOff.isScreenOff() -> "屏幕已关闭，保持暂停"
             player.playbackSuppressionReason != Player.PLAYBACK_SUPPRESSION_REASON_NONE -> "其他音频正在使用"
             getSystemService(android.media.AudioManager::class.java).mode != android.media.AudioManager.MODE_NORMAL -> "通话或车机音频模式中"
             player.playerError != null -> "播放正在恢复，暂不更新仪表"
-            player.playbackState == Player.STATE_IDLE -> "等待歌曲准备"
+            player.playbackState == Player.STATE_IDLE && !pending -> "等待歌曲准备"
             else -> null
         }
         if (unavailable != null) { dashboard.invalidate(unavailable); return }
@@ -239,8 +239,10 @@ class PlaybackService : MediaLibraryService() {
             player.playWhenReady && player.playbackState == Player.STATE_BUFFERING -> DashboardPlaybackState.BUFFERING
             else -> DashboardPlaybackState.PAUSED
         }
-        dashboard.onPlayback(DashboardInput(DashboardSnapshot(track.id, packageName, title, artist, album, state,
-            duration, player.currentPosition.coerceAtLeast(0))), tick)
+        val input = DashboardInput(DashboardSnapshot(track.id, packageName, title, artist, album, state,
+            duration, player.currentPosition.coerceAtLeast(0)))
+        if (pending && !player.isPlaying) dashboard.onPendingPlayback(input)
+        else dashboard.onPlayback(input, tick)
     }
     private fun handleSteeringAction(action: SteeringAction, valid: () -> Boolean) {
         // Never replay key presses collected during startup or a long-running queue update.

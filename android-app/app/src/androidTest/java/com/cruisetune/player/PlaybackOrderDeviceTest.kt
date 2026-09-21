@@ -104,6 +104,10 @@ class PlaybackOrderDeviceTest {
             await("Synthetic audio must load") { c.playbackState==Player.STATE_READY && screen.findViewById<View>(R.id.player_order_toggle).isEnabled }
             main { c.pause();c.seekTo(12000);c.repeatMode=Player.REPEAT_MODE_ONE }
             await("Paused seek must finish") { engine!!.playbackState==Player.STATE_READY && engine!!.currentPosition==12000L && !engine!!.playWhenReady }
+            main { screen.findViewById<View>(R.id.player_repeat_toggle).performClick() }
+            await("Queue loop must be enabled independently of playback order") {
+                c.repeatMode==Player.REPEAT_MODE_ALL && screen.findViewById<View>(R.id.player_repeat_toggle).isSelected
+            }
             fun waitOrder(random:Boolean) = await("Mode must reflect the committed queue state") {
                 c.sessionExtras.getBoolean("shuffled")==random && c.playbackState==Player.STATE_READY &&
                     screen.findViewById<TextView>(R.id.player_order_toggle).text.toString()==(if(random)"随机"else"顺序") &&
@@ -112,14 +116,14 @@ class PlaybackOrderDeviceTest {
             main {
                 val button=screen.findViewById<TextView>(R.id.player_order_toggle)
                 val row=button.parent as ViewGroup
-                assertEquals(listOf(R.id.player_lyrics_toggle,R.id.player_order_toggle,R.id.player_offline),(0 until row.childCount).map { row.getChildAt(it).id })
+                assertEquals(listOf(R.id.player_lyrics_toggle,R.id.player_order_toggle,R.id.player_repeat_toggle,R.id.player_offline),(0 until row.childCount).map { row.getChildAt(it).id })
                 button.performClick();assertFalse(button.isEnabled);assertEquals("切换",button.text.toString())
                 button.performClick()
             }
             waitOrder(true)
             main {
                 assertEquals(tracks[2].id,c.currentMediaItem?.mediaId);assertEquals(12000L,c.currentPosition);assertFalse(c.playWhenReady)
-                assertEquals(Player.REPEAT_MODE_ONE,c.repeatMode)
+                assertEquals(Player.REPEAT_MODE_ALL,c.repeatMode)
                 assertTrue(screen.findViewById<View>(R.id.player_order_toggle).isSelected)
                 screen.findViewById<View>(R.id.player_order_toggle).performClick()
             }
@@ -139,7 +143,7 @@ class PlaybackOrderDeviceTest {
                 main {
                     assertFalse("Changing order must not discard the active buffer",Player.STATE_BUFFERING in stateChanges)
                     assertFalse("Changing order must not stop playback",Player.STATE_IDLE in stateChanges)
-                    assertEquals(Player.REPEAT_MODE_ONE,engine!!.repeatMode)
+                    assertEquals(Player.REPEAT_MODE_ALL,engine!!.repeatMode)
                 }
             }
             main { c.pause();c.seekTo(18000) }
@@ -151,19 +155,19 @@ class PlaybackOrderDeviceTest {
                 assertTrue("Retry must stop the old load",Player.STATE_IDLE in stateChanges)
                 assertTrue("Retry must prepare a new load",Player.STATE_BUFFERING in stateChanges)
                 assertEquals(tracks.map { it.id },(0 until engine!!.mediaItemCount).map { engine!!.getMediaItemAt(it).mediaId })
-                assertEquals(Player.REPEAT_MODE_ONE,engine!!.repeatMode)
+                assertEquals(Player.REPEAT_MODE_ALL,engine!!.repeatMode)
                 assertTrue(engine!!.currentPosition>=18000)
             }
             assertProgressAdvances(engine!!,tracks[2].id)
             main { c.pause();engine!!.removeListener(stateListener) }
             instrument.waitForIdleSync()
             main {
-                for(id in listOf(R.id.player_lyrics_toggle,R.id.player_order_toggle,R.id.player_offline,R.id.player_previous,R.id.player_play,R.id.player_next)) {
+                for(id in listOf(R.id.player_lyrics_toggle,R.id.player_order_toggle,R.id.player_repeat_toggle,R.id.player_offline,R.id.player_previous,R.id.player_play,R.id.player_next)) {
                     val view=screen.findViewById<View>(id);val visible=Rect()
                     assertTrue(view.getGlobalVisibleRect(visible));assertEquals(view.width,visible.width());assertEquals(view.height,visible.height())
                     assertTrue(view.width>=48*view.resources.displayMetrics.density)
                     assertTrue(view.height>=48*view.resources.displayMetrics.density)
-                    if(id in listOf(R.id.player_lyrics_toggle,R.id.player_order_toggle,R.id.player_offline)) {
+                    if(id in listOf(R.id.player_lyrics_toggle,R.id.player_order_toggle,R.id.player_repeat_toggle,R.id.player_offline)) {
                         val label=view as TextView
                         assertEquals("Secondary label must fit",1,label.layout.lineCount)
                         assertEquals("Secondary label must not be truncated",0,label.layout.getEllipsisCount(0))

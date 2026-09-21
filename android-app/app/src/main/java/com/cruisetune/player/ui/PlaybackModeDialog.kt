@@ -11,6 +11,8 @@ import com.cruisetune.player.ui.Design.dp
 
 object PlaybackModes {
     val modes = listOf(Player.REPEAT_MODE_OFF, Player.REPEAT_MODE_ONE, Player.REPEAT_MODE_ALL)
+    fun queueLoopEnabled(mode: Int) = mode == Player.REPEAT_MODE_ALL
+    fun toggleQueueLoop(mode: Int) = if (queueLoopEnabled(mode)) Player.REPEAT_MODE_OFF else Player.REPEAT_MODE_ALL
     fun label(mode: Int) = when(mode) {
         Player.REPEAT_MODE_ONE -> "单曲循环"
         Player.REPEAT_MODE_ALL -> "列表循环"

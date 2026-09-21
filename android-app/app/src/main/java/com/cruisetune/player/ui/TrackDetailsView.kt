@@ -3,6 +3,7 @@ package com.cruisetune.player.ui
 import android.content.Context
 import android.graphics.Bitmap
 import android.text.TextUtils
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
@@ -11,6 +12,7 @@ import android.widget.TextView
 import android.widget.ScrollView
 import androidx.core.view.ViewCompat
 import androidx.core.view.animation.PathInterpolatorCompat
+import androidx.core.widget.TextViewCompat
 import com.cruisetune.player.R
 import com.cruisetune.player.core.OfflineState
 import com.cruisetune.player.ui.Design.dp
@@ -52,7 +54,9 @@ internal class ArtworkSwitcher(context: Context) : FrameLayout(context) {
     }
 }
 
-internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keepOffline: () -> Unit, toggleOrder: () -> Unit = {}) : LinearLayout(context) {
+internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keepOffline: () -> Unit,
+    toggleOrder: () -> Unit = {}, toggleRepeat: () -> Unit = {}) : LinearLayout(context) {
+    private val actionHorizontalPadding = context.dp(4)
     private val artwork = ArtworkSwitcher(context).apply { id = R.id.player_artwork }
     private val lyrics = object:LinearLayout(context) {
         override fun onMeasure(widthMeasureSpec:Int,heightMeasureSpec:Int) {
@@ -89,16 +93,20 @@ internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keep
         id=R.id.player_album;gravity=Gravity.CENTER;minLines=1;maxLines=1;ellipsize=TextUtils.TruncateAt.END;visibility=INVISIBLE
     }
     private val mode = TouchButton(context, "歌词").apply {
-        id=R.id.player_lyrics_toggle;textSize=18f;minHeight=context.dp(48);setPadding(context.dp(8),context.dp(6),context.dp(8),context.dp(6))
+        id=R.id.player_lyrics_toggle;minHeight=context.dp(48);setPadding(actionHorizontalPadding,context.dp(6),actionHorizontalPadding,context.dp(6));fitActionText()
         isEnabled=false;setOnClickListener { toggleLyrics() }
     }
     private val offline = TouchButton(context, "保留离线").apply {
-        id=R.id.player_offline;textSize=18f;minHeight=context.dp(48);setPadding(context.dp(8),context.dp(6),context.dp(8),context.dp(6))
+        id=R.id.player_offline;minHeight=context.dp(48);setPadding(actionHorizontalPadding,context.dp(6),actionHorizontalPadding,context.dp(6));fitActionText()
         isEnabled=false;setOnClickListener { keepOffline() }
     }
     private val order = TouchButton(context, "顺序").apply {
-        id=R.id.player_order_toggle;textSize=18f;minHeight=context.dp(48);setPadding(context.dp(8),context.dp(6),context.dp(8),context.dp(6))
+        id=R.id.player_order_toggle;minHeight=context.dp(48);setPadding(actionHorizontalPadding,context.dp(6),actionHorizontalPadding,context.dp(6));fitActionText()
         isEnabled=false;maxLines=1;setOnClickListener { toggleOrder() }
+    }
+    private val repeat = TouchButton(context, "循环").apply {
+        id=R.id.player_repeat_toggle;minHeight=context.dp(48);setPadding(actionHorizontalPadding,context.dp(6),actionHorizontalPadding,context.dp(6));fitActionText()
+        isEnabled=false;maxLines=1;setOnClickListener { toggleRepeat() }
     }
 
     init {
@@ -117,7 +125,8 @@ internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keep
         val actions=LinearLayout(context)
         actions.addView(mode,LayoutParams(0,-2,1f))
         actions.addView(order,LayoutParams(0,-2,1f).apply { marginStart=context.dp(8) })
-        actions.addView(offline,LayoutParams(0,-2,if(resources.configuration.fontScale>1.3f)1.8f else 1f).apply { marginStart=context.dp(8) })
+        actions.addView(repeat,LayoutParams(0,-2,1.25f).apply { marginStart=context.dp(8) })
+        actions.addView(offline,LayoutParams(0,-2,if(resources.configuration.fontScale>1.3f)1.8f else 1.6f).apply { marginStart=context.dp(8) })
         addView(actions,LayoutParams(-1,-2))
     }
 
@@ -134,6 +143,19 @@ internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keep
             else -> "当前顺序播放，点击切换为随机播放"
         }
         ViewCompat.setStateDescription(order,if(switching)"切换中" else if(shuffled)"随机播放" else "顺序播放")
+    }
+
+    fun updateRepeat(repeatMode: Int, available: Boolean, switching: Boolean = false) {
+        val enabled = PlaybackModes.queueLoopEnabled(repeatMode)
+        repeat.selectedState(enabled)
+        repeat.setTextIfChanged(if (enabled) "循环" else "不循环")
+        repeat.isEnabled=available
+        repeat.contentDescription=when {
+            switching -> if (enabled) "正在开启列表循环，点击可取消切换" else "正在关闭列表循环，点击可取消切换"
+            enabled -> "当前列表循环，点击关闭列表循环"
+            else -> "当前不循环，点击开启列表循环"
+        }
+        ViewCompat.setStateDescription(repeat,if(switching)"切换中" else if(enabled)"列表循环" else "不循环")
     }
 
     fun update(artist: String?, album: String?, showingLyrics: Boolean, state: LyricsState,
@@ -170,4 +192,8 @@ internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keep
     }
 
     private fun TextView.setTextIfChanged(value: CharSequence) { if(!TextUtils.equals(text,value))text=value }
+    private fun TextView.fitActionText() {
+        maxLines = 1
+        TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(this,12,18,1,TypedValue.COMPLEX_UNIT_SP)
+    }
 }

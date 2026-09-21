@@ -38,6 +38,7 @@ internal class DashboardSyncController(
     private var retryCount = 0
     private var epoch = 0L
     private var latest: DashboardInput? = null
+    private var pendingPlaybackRequested = false
     private var lastSentSnapshot: DashboardSnapshot? = null
     private var clearRequested = false
     private var lastSignature: String? = null
@@ -57,7 +58,12 @@ internal class DashboardSyncController(
 
     fun onPlayback(input: DashboardInput, tick: Boolean = false) {
         if (closed) return
+        if (pendingPlaybackRequested && input.snapshot.state == DashboardPlaybackState.PAUSED) {
+            onPendingPlayback(input)
+            return
+        }
         latest = input
+        pendingPlaybackRequested = false
         if (!settings.enabled) {
             policy.invalidate()
             return
@@ -85,6 +91,30 @@ internal class DashboardSyncController(
         submit(outgoing, coalesce = !tick && outgoing.size == 1 && outgoing.single().state == DashboardPlaybackState.PLAYING)
     }
 
+    /** Publishes the restored queue item as paused before the user starts playback. */
+    fun onPendingPlayback(input: DashboardInput) {
+        if (closed) return
+        val pending = input.copy(snapshot = input.snapshot.copy(state = DashboardPlaybackState.PAUSED))
+        latest = pending
+        pendingPlaybackRequested = true
+        if (!settings.enabled) {
+            pendingPlaybackRequested = false
+            policy.invalidate()
+            return
+        }
+        if (input.invalidated) {
+            pendingPlaybackRequested = false
+            invalidate(input.invalidationReason.ifBlank { "当前播放不可同步" })
+            return
+        }
+        if (endpoint?.ready != true) {
+            refreshEndpoint()
+            return
+        }
+        pendingPlaybackRequested = false
+        submit(listOf(pending.snapshot), coalesce = false, force = true)
+    }
+
     /** User initiated: re-check the fixed endpoint and send only an actually playing snapshot. */
     fun requestResend() {
         if (closed || !settings.enabled) return
@@ -93,6 +123,7 @@ internal class DashboardSyncController(
     }
 
     fun invalidate(reason: String, allowWhenDisabled: Boolean = settings.enabled) {
+        pendingPlaybackRequested = false
         val alreadyClearing = clearRequested && (inFlight?.clear == true || pending.any { it.clear })
         if (!alreadyClearing) {
             epoch++
@@ -117,6 +148,7 @@ internal class DashboardSyncController(
         closed = true
         preferences.unregisterOnSharedPreferenceChangeListener(changed)
         epoch++
+        pendingPlaybackRequested = false
         pending.clear()
         checking?.cancel(); checking = null
         coalescing?.cancel(); coalescing = null
@@ -128,6 +160,7 @@ internal class DashboardSyncController(
     private fun onSettingChanged() {
         if (closed) return
         if (!settings.enabled) {
+            pendingPlaybackRequested = false
             invalidate("仪表媒体显示已关闭", allowWhenDisabled = true)
             if (!clearRequested && inFlight?.clear != true) endpoint = null
             update(DashboardStatusKind.DISABLED, "未开启仪表媒体显示")
@@ -155,7 +188,10 @@ internal class DashboardSyncController(
             }
             update(DashboardStatusKind.WAITING, result.detail, result)
             val input = latest ?: return@launch
-            if (!input.invalidated && input.snapshot.state == DashboardPlaybackState.PLAYING) {
+            if (!input.invalidated && pendingPlaybackRequested && input.snapshot.state == DashboardPlaybackState.PAUSED) {
+                pendingPlaybackRequested = false
+                submit(listOf(input.snapshot), coalesce = false, force = true)
+            } else if (!input.invalidated && input.snapshot.state == DashboardPlaybackState.PLAYING) {
                 val outgoing = policy.onPlayback(input)
                 submit(outgoing, coalesce = false, force = true)
             }

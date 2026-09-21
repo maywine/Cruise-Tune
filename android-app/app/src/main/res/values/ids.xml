@@ -14,6 +14,7 @@
     <item type="id" name="player_lyric_scroll" />
     <item type="id" name="player_lyrics_toggle" />
     <item type="id" name="player_order_toggle" />
+    <item type="id" name="player_repeat_toggle" />
     <item type="id" name="player_offline" />
     <item type="id" name="player_now" />
     <item type="id" name="player_status" />

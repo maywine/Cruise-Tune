@@ -81,6 +81,9 @@ class MainActivity : CruiseActivity() {
     private var activeLyricsKey: String? = null
     private var pendingOffline: String? = null
     private var switchingOrder = false
+    private var switchingRepeat = false
+    private var pendingRepeatMode: Int? = null
+    private var repeatSwitchTimeout: Job? = null
     private lateinit var seek: SeekBar
     private lateinit var play: TouchButton
     private lateinit var previous: TouchButton
@@ -165,6 +168,7 @@ class MainActivity : CruiseActivity() {
                     controller = c
                     c.addListener(object : Player.Listener {
                         override fun onEvents(player: Player, events: Player.Events) {
+                            if (events.contains(Player.EVENT_REPEAT_MODE_CHANGED)) settleRepeatSwitch(player)
                             renderPlayer()
                             if (events.containsAny(Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_REPEAT_MODE_CHANGED)) onQueueChanged(player.mediaItemCount)
                         }
@@ -278,7 +282,7 @@ class MainActivity : CruiseActivity() {
         elapsed=Design.label(this,"0:00",if(compact)16f else 18f,Design.secondary)
         duration=Design.label(this,"—",if(compact)16f else 18f,Design.secondary).apply{gravity=Gravity.END}
         times.addView(elapsed,LinearLayout.LayoutParams(0,-2,1f));times.addView(duration,LinearLayout.LayoutParams(0,-2,1f));now.addView(times)
-        details = if(spec.inlineDetails && !detailsExpanded) TrackDetailsView(this,::toggleLyrics,::keepCurrentOffline,::togglePlaybackOrder).also {
+        details = if(spec.inlineDetails && !detailsExpanded) TrackDetailsView(this,::toggleLyrics,::keepCurrentOffline,::togglePlaybackOrder,::toggleQueueLoop).also {
             now.addView(it,LinearLayout.LayoutParams(-1,if(spec.landscape)0 else dp(240),if(spec.landscape)1f else 0f).apply { topMargin=dp(8) })
         } else null
         val playbackColumn = if(spec.landscape) LinearLayout(this).apply {
@@ -313,7 +317,7 @@ class MainActivity : CruiseActivity() {
         frame.addView(empty,FrameLayout.LayoutParams(-1,-1))
         if(detailsExpanded) {
             lists.background=Design.surface(Design.panel,dp(24).toFloat());lists.setPadding(dp(12),dp(12),dp(12),dp(12))
-            details=TrackDetailsView(this,::toggleLyrics,::keepCurrentOffline,::togglePlaybackOrder).also { lists.addView(it,LinearLayout.LayoutParams(-1,0,1f)) }
+            details=TrackDetailsView(this,::toggleLyrics,::keepCurrentOffline,::togglePlaybackOrder,::toggleQueueLoop).also { lists.addView(it,LinearLayout.LayoutParams(-1,0,1f)) }
         } else lists.addView(frame,LinearLayout.LayoutParams(-1,0,1f))
         body.addView(lists,if(spec.landscape)LinearLayout.LayoutParams(0,-1,1.15f)else LinearLayout.LayoutParams(-1,0,1f))
         root.addView(body,LinearLayout.LayoutParams(-1,0,1f).apply{topMargin=dp(8)})
@@ -405,10 +409,10 @@ class MainActivity : CruiseActivity() {
         empty.text = if (showingQueue) "队列还是空的\n从我的曲库选一首音乐" else "添加一个音乐目录\n喜欢的音乐，就在路上"
         listTitle.text = if (library.scanning != null) "正在读取目录 · ${library.scannedCount} 首" else "${if (showingQueue) "接下来播放" else library.sources.find { it.id == selectedSource }?.title ?: "全部音乐"} · ${tracks.size} 首"
         if (library.scanning == null) {
-            val mode = when(c?.repeatMode) { Player.REPEAT_MODE_ONE -> "单曲"; Player.REPEAT_MODE_ALL -> "循环"; else -> "顺序" }
             val name = if(showingQueue) "队列" else library.sources.find { it.id == selectedSource }?.title ?: "曲库"
-            listTitle.text = "$mode · $name · ${tracks.size} 首"
-            listTitle.contentDescription = "${PlaybackModes.label(c?.repeatMode ?: Player.REPEAT_MODE_OFF)}，$name，${tracks.size} 首"
+            val repeatMode = pendingRepeatMode ?: c?.repeatMode ?: Player.REPEAT_MODE_OFF
+            listTitle.text = "$name · ${tracks.size} 首"
+            listTitle.contentDescription = "${PlaybackModes.label(repeatMode)}，$name，${tracks.size} 首"
         }
     }
     private fun trackSort() = TrackSort.fromPreference(app.preferences.getString(TrackSort.PREFERENCE, null))
@@ -513,7 +517,9 @@ class MainActivity : CruiseActivity() {
             it.showArtwork(track?.id,artworkBitmap)
             it.update(metadata?.artist?.toString(),metadata?.albumTitle?.toString(),showingLyrics,state,
                 displayedPosition(),track != null,offline,cacheStatus.text)
-            it.updateOrder(c?.sessionExtras?.getBoolean("shuffled")==true,(c?.mediaItemCount ?: 0)>0,switchingOrder)
+            val available = (c?.mediaItemCount ?: 0)>0
+            it.updateOrder(c?.sessionExtras?.getBoolean("shuffled")==true,available,switchingOrder)
+            it.updateRepeat(pendingRepeatMode ?: c?.repeatMode ?: Player.REPEAT_MODE_OFF,available,switchingRepeat)
         }
     }
     private fun togglePlaybackOrder() {
@@ -533,6 +539,42 @@ class MainActivity : CruiseActivity() {
         } catch (_: Exception) {
             switchingOrder=false;renderDetails();toast("播放顺序暂时无法切换，请重试")
         }
+    }
+    private fun toggleQueueLoop() {
+        val c = controller ?: return
+        if (c.mediaItemCount == 0) return
+        val target = PlaybackModes.toggleQueueLoop(pendingRepeatMode ?: c.repeatMode)
+        pendingRepeatMode = target
+        switchingRepeat = true
+        renderDetails()
+        repeatSwitchTimeout?.cancel()
+        repeatSwitchTimeout = lifecycleScope.launch {
+            delay(1200)
+            if (pendingRepeatMode == target) {
+                if (c.repeatMode == target) {
+                    settleRepeatSwitch(c)
+                    renderPlayer(); renderList()
+                }
+                else failRepeatSwitch()
+            }
+        }
+        try {
+            c.repeatMode = target
+        } catch (_: Exception) {
+            failRepeatSwitch()
+        }
+    }
+    private fun settleRepeatSwitch(player: Player) {
+        val target = pendingRepeatMode ?: return
+        if (player.repeatMode != target) return
+        repeatSwitchTimeout?.cancel(); repeatSwitchTimeout = null
+        pendingRepeatMode = null; switchingRepeat = false
+    }
+    private fun failRepeatSwitch() {
+        repeatSwitchTimeout?.cancel(); repeatSwitchTimeout = null
+        pendingRepeatMode = null; switchingRepeat = false
+        toast("循环暂时无法切换，请重试")
+        renderPlayer(); renderList()
     }
     private fun currentMetadata() = app.playbackMetadata.value.forTrack(controller?.currentMediaItem?.mediaId)
     private fun toggleLyrics() {

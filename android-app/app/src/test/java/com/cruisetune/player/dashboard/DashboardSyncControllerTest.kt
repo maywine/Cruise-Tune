@@ -61,6 +61,26 @@ class DashboardSyncControllerTest {
         controller.close()
     }
 
+    @Test fun startupPendingTrackIsPublishedAsPausedUntilPlaybackStarts() = runTest {
+        val context = RuntimeEnvironment.getApplication() as Application
+        val preferences = context.getSharedPreferences("dashboard-pending", Context.MODE_PRIVATE).apply {
+            edit().clear().putBoolean(DashboardSettings.ENABLED, true).commit()
+        }
+        val transport = FakeTransport()
+        val controller = DashboardSyncController(this, DashboardSettings(preferences), preferences, transport, MutableStateFlow(DashboardStatus()),
+            elapsedMs = { testScheduler.currentTime }, ioDispatcher = StandardTestDispatcher(testScheduler))
+        advanceUntilIdle()
+
+        controller.onPendingPlayback(DashboardInput(snapshot(DashboardPlaybackState.PAUSED)))
+        advanceUntilIdle()
+        assertEquals(listOf(2), transport.sent.map { it.getIntExtra("RECEIVER_MEDIA_PLAY_STATUS", -1) })
+
+        controller.onPlayback(DashboardInput(snapshot(DashboardPlaybackState.PLAYING)))
+        advanceTimeBy(200); advanceUntilIdle()
+        assertEquals(listOf(2, 3), transport.sent.map { it.getIntExtra("RECEIVER_MEDIA_PLAY_STATUS", -1) })
+        controller.close()
+    }
+
     @Test fun disablingSyncClearsTheLastPlayingState() = runTest {
         val context = RuntimeEnvironment.getApplication() as Application
         val preferences = context.getSharedPreferences("dashboard-disable", Context.MODE_PRIVATE).apply {
