@@ -116,7 +116,12 @@ class PlaybackOrderDeviceTest {
             main {
                 val button=screen.findViewById<TextView>(R.id.player_order_toggle)
                 val row=button.parent as ViewGroup
-                assertEquals(listOf(R.id.player_lyrics_toggle,R.id.player_order_toggle,R.id.player_repeat_toggle,R.id.player_offline),(0 until row.childCount).map { row.getChildAt(it).id })
+                fun actionIds(group: ViewGroup): List<Int> = (0 until group.childCount).flatMap { child ->
+                    val view=group.getChildAt(child)
+                    if (view is ViewGroup) actionIds(view) else listOf(view.id)
+                }
+                val actions=(row.parent as? ViewGroup)?.takeIf { it.childCount == 2 && it.getChildAt(0) is ViewGroup } ?: row
+                assertEquals(listOf(R.id.player_lyrics_toggle,R.id.player_order_toggle,R.id.player_repeat_toggle,R.id.player_offline),actionIds(actions))
                 button.performClick();assertFalse(button.isEnabled);assertEquals("切换",button.text.toString())
                 button.performClick()
             }

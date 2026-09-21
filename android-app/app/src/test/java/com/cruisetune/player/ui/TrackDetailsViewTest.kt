@@ -43,7 +43,7 @@ class TrackDetailsViewTest {
         view.updateRepeat(Player.REPEAT_MODE_ALL,true)
         assertTrue(repeat.isSelected);assertTrue(repeat.contentDescription.toString().contains("关闭列表循环"))
         view.updateRepeat(Player.REPEAT_MODE_ALL,true,true)
-        assertEquals("循环",repeat.text.toString());assertTrue(repeat.isEnabled)
+        assertEquals("切换中",repeat.text.toString());assertTrue(repeat.isEnabled)
         assertTrue(repeat.contentDescription.toString().contains("取消切换"))
         view.updateOrder(true,true,true)
         assertEquals("切换",order.text.toString());assertFalse(order.isEnabled)
@@ -74,7 +74,6 @@ class TrackDetailsViewTest {
                     android.graphics.Rect(button.left,button.top,button.right,button.bottom)
                 }
                 if(original==null)original=bounds else assertEquals("State changes must not move the row",original,bounds)
-                assertTrue(bounds[0].right<bounds[1].left && bounds[1].right<bounds[2].left && bounds[2].right<bounds[3].left)
             }
         }
     }

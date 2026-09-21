@@ -316,11 +316,11 @@ class MainActivity : CruiseActivity() {
         empty=Design.label(this,"添加一个音乐目录\n喜欢的音乐，就在路上",if(compact)18f else 22f,Design.secondary).apply{gravity=Gravity.CENTER;setLineSpacing(dp(6).toFloat(),1f);setOnClickListener{showSources()};isFocusable=true;contentDescription="尚无音乐，点击添加来源"}
         frame.addView(empty,FrameLayout.LayoutParams(-1,-1))
         if(detailsExpanded) {
-            lists.background=Design.surface(Design.panel,dp(24).toFloat());lists.setPadding(dp(12),dp(12),dp(12),dp(12))
+            lists.background=Design.surface(Design.panel,dp(24).toFloat());lists.setPadding(dp(12),if(config.fontScale>1.3f)dp(6) else dp(12),dp(12),if(config.fontScale>1.3f)0 else dp(12))
             details=TrackDetailsView(this,::toggleLyrics,::keepCurrentOffline,::togglePlaybackOrder,::toggleQueueLoop).also { lists.addView(it,LinearLayout.LayoutParams(-1,0,1f)) }
         } else lists.addView(frame,LinearLayout.LayoutParams(-1,0,1f))
         body.addView(lists,if(spec.landscape)LinearLayout.LayoutParams(0,-1,1.15f)else LinearLayout.LayoutParams(-1,0,1f))
-        root.addView(body,LinearLayout.LayoutParams(-1,0,1f).apply{topMargin=dp(8)})
+        root.addView(body,LinearLayout.LayoutParams(-1,0,1f).apply{topMargin=dp(if(config.fontScale>1.3f && detailsExpanded)7 else 8)})
 
         val footer=FrameLayout(this).apply{id=R.id.player_footer;setPadding(0,dp(8),0,0)}
         val row=(if(spec.landscape)LinearLayout(this)else BoundedControlRow(this,480)).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}

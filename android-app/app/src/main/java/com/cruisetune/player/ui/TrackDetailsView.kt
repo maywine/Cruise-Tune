@@ -57,6 +57,7 @@ internal class ArtworkSwitcher(context: Context) : FrameLayout(context) {
 internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keepOffline: () -> Unit,
     toggleOrder: () -> Unit = {}, toggleRepeat: () -> Unit = {}) : LinearLayout(context) {
     private val actionHorizontalPadding = context.dp(4)
+    private val largeActions = resources.configuration.fontScale > 1.3f && resources.configuration.screenWidthDp < 350
     private val artwork = ArtworkSwitcher(context).apply { id = R.id.player_artwork }
     private val lyrics = object:LinearLayout(context) {
         override fun onMeasure(widthMeasureSpec:Int,heightMeasureSpec:Int) {
@@ -122,11 +123,23 @@ internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keep
         metadata.addView(artistLabel,LayoutParams(-1,-2))
         metadata.addView(albumLabel,LayoutParams(-1,-2).apply { topMargin=context.dp(4) })
         addView(metadata,LayoutParams(-1,-2).apply { topMargin=context.dp(8);bottomMargin=context.dp(4) })
-        val actions=LinearLayout(context)
-        actions.addView(mode,LayoutParams(0,-2,1f))
-        actions.addView(order,LayoutParams(0,-2,1f).apply { marginStart=context.dp(8) })
-        actions.addView(repeat,LayoutParams(0,-2,1.25f).apply { marginStart=context.dp(8) })
-        actions.addView(offline,LayoutParams(0,-2,if(resources.configuration.fontScale>1.3f)1.8f else 1.6f).apply { marginStart=context.dp(8) })
+        val actions=LinearLayout(context).apply { orientation=if (largeActions) VERTICAL else HORIZONTAL }
+        fun addButton(row: LinearLayout, button: View, weight: Float = 1f) {
+            row.addView(button,LayoutParams(0,-2,weight).apply { if (row.childCount > 0) marginStart=context.dp(8) })
+        }
+        if (largeActions) {
+            val first=LinearLayout(context)
+            val second=LinearLayout(context)
+            addButton(first,mode);addButton(first,order)
+            addButton(second,repeat);addButton(second,offline)
+            actions.addView(first,LayoutParams(-1,-2))
+            actions.addView(second,LayoutParams(-1,-2))
+        } else {
+            addButton(actions,mode)
+            addButton(actions,order)
+            addButton(actions,repeat,1.25f)
+            addButton(actions,offline,1.6f)
+        }
         addView(actions,LayoutParams(-1,-2))
     }
 
@@ -148,7 +161,7 @@ internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keep
     fun updateRepeat(repeatMode: Int, available: Boolean, switching: Boolean = false) {
         val enabled = PlaybackModes.queueLoopEnabled(repeatMode)
         repeat.selectedState(enabled)
-        repeat.setTextIfChanged(if (enabled) "循环" else "不循环")
+        repeat.setTextIfChanged(if (switching) "切换中" else if (enabled) "循环" else "不循环")
         repeat.isEnabled=available
         repeat.contentDescription=when {
             switching -> if (enabled) "正在开启列表循环，点击可取消切换" else "正在关闭列表循环，点击可取消切换"
@@ -194,6 +207,6 @@ internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keep
     private fun TextView.setTextIfChanged(value: CharSequence) { if(!TextUtils.equals(text,value))text=value }
     private fun TextView.fitActionText() {
         maxLines = 1
-        TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(this,12,18,1,TypedValue.COMPLEX_UNIT_SP)
+        TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(this,16,18,1,TypedValue.COMPLEX_UNIT_SP)
     }
 }

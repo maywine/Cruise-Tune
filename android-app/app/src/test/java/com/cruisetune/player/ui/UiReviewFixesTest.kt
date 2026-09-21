@@ -165,8 +165,12 @@ class UiReviewFixesTest {
             val order=a.findViewById<TouchButton>(R.id.player_order_toggle)
             assertNotNull(order)
             val secondary=order.parent as ViewGroup
-            assertEquals(listOf(R.id.player_lyrics_toggle,R.id.player_order_toggle,R.id.player_repeat_toggle,R.id.player_offline),
-                (0 until secondary.childCount).map { secondary.getChildAt(it).id })
+            fun actionIds(group: ViewGroup): List<Int> = (0 until group.childCount).flatMap { child ->
+                val view=group.getChildAt(child)
+                if (view is ViewGroup) actionIds(view) else listOf(view.id)
+            }
+            val actionRoot=(secondary.parent as? ViewGroup)?.takeIf { it.childCount == 2 && it.getChildAt(0) is ViewGroup } ?: secondary
+            assertEquals(listOf(R.id.player_lyrics_toggle,R.id.player_order_toggle,R.id.player_repeat_toggle,R.id.player_offline),actionIds(actionRoot))
 
             views(a.window.decorView).filterIsInstance<TouchButton>().single { it.text.toString()=="设置" }.performClick()
             val settings=ShadowDialog.getLatestDialog()
