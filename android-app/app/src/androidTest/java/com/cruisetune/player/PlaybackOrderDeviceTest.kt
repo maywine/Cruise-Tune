@@ -110,7 +110,7 @@ class PlaybackOrderDeviceTest {
             }
             fun waitOrder(random:Boolean) = await("Mode must reflect the committed queue state") {
                 c.sessionExtras.getBoolean("shuffled")==random && c.playbackState==Player.STATE_READY &&
-                    screen.findViewById<TextView>(R.id.player_order_toggle).text.toString()==(if(random)"随机"else"顺序") &&
+                    screen.findViewById<TextView>(R.id.player_order_toggle).text.toString().contains(if(random)"随机"else"顺序") &&
                     screen.findViewById<View>(R.id.player_order_toggle).isEnabled
             }
             main {

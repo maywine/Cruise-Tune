@@ -58,6 +58,10 @@ internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keep
     toggleOrder: () -> Unit = {}, toggleRepeat: () -> Unit = {}) : LinearLayout(context) {
     private val actionHorizontalPadding = context.dp(4)
     private val largeActions = resources.configuration.fontScale > 1.3f && resources.configuration.screenWidthDp < 350
+    // Wide car panels have enough room for an even rhythm. Narrow panels retain the
+    // content-aware weighting so the four-character offline label remains intact.
+    private val balancedActions = resources.configuration.screenWidthDp >= 500
+    private val descriptiveActionLabels = balancedActions || largeActions
     private val artwork = ArtworkSwitcher(context).apply { id = R.id.player_artwork }
     private val lyrics = object:LinearLayout(context) {
         override fun onMeasure(widthMeasureSpec:Int,heightMeasureSpec:Int) {
@@ -124,21 +128,22 @@ internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keep
         metadata.addView(albumLabel,LayoutParams(-1,-2).apply { topMargin=context.dp(4) })
         addView(metadata,LayoutParams(-1,-2).apply { topMargin=context.dp(8);bottomMargin=context.dp(4) })
         val actions=LinearLayout(context).apply { orientation=if (largeActions) VERTICAL else HORIZONTAL }
-        fun addButton(row: LinearLayout, button: View, weight: Float = 1f) {
-            row.addView(button,LayoutParams(0,-2,weight).apply { if (row.childCount > 0) marginStart=context.dp(8) })
+        fun addButton(row: LinearLayout, button: View, weight: Float = 1f, gapDp: Int = 8) {
+            row.addView(button,LayoutParams(0,-2,weight).apply { if (row.childCount > 0) marginStart=context.dp(gapDp) })
         }
         if (largeActions) {
-            val first=LinearLayout(context)
-            val second=LinearLayout(context)
+            val first=LinearLayout(context).apply { orientation = HORIZONTAL }
+            val second=LinearLayout(context).apply { orientation = HORIZONTAL }
             addButton(first,mode);addButton(first,order)
             addButton(second,repeat);addButton(second,offline)
             actions.addView(first,LayoutParams(-1,-2))
             actions.addView(second,LayoutParams(-1,-2))
         } else {
             addButton(actions,mode)
-            addButton(actions,order)
-            addButton(actions,repeat,1.25f)
-            addButton(actions,offline,1.6f)
+            // The larger gaps visually separate utility controls from the playback-mode pair.
+            addButton(actions,order,1f,if (balancedActions) 16 else 8)
+            addButton(actions,repeat,if (balancedActions) 1f else 1.25f)
+            addButton(actions,offline,if (balancedActions) 1f else 1.6f,if (balancedActions) 16 else 8)
         }
         addView(actions,LayoutParams(-1,-2))
     }
@@ -146,7 +151,11 @@ internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keep
     fun showArtwork(track: String?, bitmap: Bitmap?) = artwork.show(track, bitmap)
 
     fun updateOrder(shuffled: Boolean, available: Boolean, switching: Boolean = false) {
-        order.setTextIfChanged(if(switching)"切换" else if(shuffled)"随机" else "顺序")
+        order.setTextIfChanged(when {
+            switching -> "切换"
+            shuffled -> if (descriptiveActionLabels) "随机播放" else "随机"
+            else -> if (descriptiveActionLabels) "顺序播放" else "顺序"
+        })
         order.selectedState(shuffled)
         order.isEnabled=available && !switching
         order.contentDescription=when {
@@ -161,7 +170,11 @@ internal class TrackDetailsView(context: Context, toggleLyrics: () -> Unit, keep
     fun updateRepeat(repeatMode: Int, available: Boolean, switching: Boolean = false) {
         val enabled = PlaybackModes.queueLoopEnabled(repeatMode)
         repeat.selectedState(enabled)
-        repeat.setTextIfChanged(if (switching) "切换中" else if (enabled) "循环" else "不循环")
+        repeat.setTextIfChanged(when {
+            switching -> "切换中"
+            enabled -> if (descriptiveActionLabels) "列表循环" else "循环"
+            else -> if (descriptiveActionLabels) "循环：关" else "不循环"
+        })
         repeat.isEnabled=available
         repeat.contentDescription=when {
             switching -> if (enabled) "正在开启列表循环，点击可取消切换" else "正在关闭列表循环，点击可取消切换"

@@ -270,7 +270,16 @@ class MainActivity : CruiseActivity() {
         now.addView(info)
         seek=SeekBar(this).apply{
             id=R.id.player_seek;max=10000;minimumHeight=dp(if(compact)48 else 64);contentDescription="播放进度"
-            progressTintList=ColorStateList.valueOf(Design.accent);thumbTintList=ColorStateList.valueOf(Design.accent);setPadding(dp(6),0,dp(6),0)
+            progressTintList=ColorStateList.valueOf(Design.accent)
+            progressBackgroundTintList=ColorStateList(
+                arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf()),
+                intArrayOf(Design.progressTrackDisabled, Design.progressTrack)
+            )
+            thumbTintList=ColorStateList(
+                arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf()),
+                intArrayOf(Design.progressTrackDisabled, Design.accent)
+            )
+            setPadding(dp(6),0,dp(6),0)
             setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener{
                 override fun onStartTrackingTouch(seekBar:SeekBar){previewSeek(seekBar.progress)}
                 override fun onStopTrackingTouch(seekBar:SeekBar){finishSeek(seekBar.progress)}
@@ -280,10 +289,14 @@ class MainActivity : CruiseActivity() {
         now.addView(seek,LinearLayout.LayoutParams(-1,dp(if(compact)48 else 64)))
         val times=LinearLayout(this).apply{id=R.id.player_times}
         elapsed=Design.label(this,"0:00",if(compact)16f else 18f,Design.secondary)
-        duration=Design.label(this,"—",if(compact)16f else 18f,Design.secondary).apply{gravity=Gravity.END}
+        // Keep the time row height stable when the unknown-duration label is longer
+        // than a formatted timestamp; this prevents it from squeezing lyric content.
+        duration=Design.label(this,"时长未知",13f,Design.secondary).apply{gravity=Gravity.END or Gravity.CENTER_VERTICAL;contentDescription="总时长未知"}
         times.addView(elapsed,LinearLayout.LayoutParams(0,-2,1f));times.addView(duration,LinearLayout.LayoutParams(0,-2,1f));now.addView(times)
         details = if(spec.inlineDetails && !detailsExpanded) TrackDetailsView(this,::toggleLyrics,::keepCurrentOffline,::togglePlaybackOrder,::toggleQueueLoop).also {
-            now.addView(it,LinearLayout.LayoutParams(-1,if(spec.landscape)0 else dp(240),if(spec.landscape)1f else 0f).apply { topMargin=dp(8) })
+            now.addView(it,LinearLayout.LayoutParams(-1,if(spec.landscape)0 else dp(240),if(spec.landscape)1f else 0f).apply {
+                topMargin=dp(8)
+            })
         } else null
         val playbackColumn = if(spec.landscape) LinearLayout(this).apply {
             orientation=LinearLayout.VERTICAL
@@ -606,13 +619,16 @@ class MainActivity : CruiseActivity() {
         val c = controller ?: return
         val total = knownDuration()
         seek.isEnabled = total > 0
-        seek.alpha = if (total > 0) 1f else .35f
+        // Keep the track legible while the duration is loading; the disabled tint and
+        // accessibility description communicate that seeking is temporarily unavailable.
+        seek.alpha = 1f
         seek.contentDescription = if(total > 0) "播放进度" else "播放进度，等待加载时长，已恢复至 ${time(c.currentPosition)}"
         if (seekPreviewMs == null) {
             seek.progress = if(total > 0) (c.currentPosition * 10000 / total).toInt().coerceIn(0,10000) else 0
         }
         elapsed.updateText(time(displayedPosition()))
-        duration.updateText(if(total > 0) time(total) else "—")
+        duration.updateText(if(total > 0) time(total) else "时长未知")
+        duration.contentDescription = if(total > 0) "总时长 ${time(total)}" else "总时长未知"
         if(showingLyrics && lyricsState.key == activeLyricsKey) {
             renderLyricsAt(displayedPosition())
         }

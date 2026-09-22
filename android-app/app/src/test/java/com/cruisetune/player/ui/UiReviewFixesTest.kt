@@ -415,7 +415,9 @@ class UiReviewFixesTest {
         val controller=Robolectric.buildActivity(MainActivity::class.java).create().start().resume().visible()
         try {
             val timeRow=controller.get().findViewById<ViewGroup>(R.id.player_times)
-            assertEquals("—",(timeRow.getChildAt(1) as TextView).text.toString())
+            val duration=timeRow.getChildAt(1) as TextView
+            assertEquals("时长未知",duration.text.toString())
+            assertEquals("总时长未知",duration.contentDescription.toString())
         } finally {controller.pause().stop().destroy()}
     }
 }

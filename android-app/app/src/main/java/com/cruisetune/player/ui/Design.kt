@@ -20,6 +20,9 @@ object Design {
     var background = Color.rgb(16, 20, 24); private set
     var panel = Color.rgb(27, 33, 39); private set
     var raised = Color.rgb(40, 47, 53); private set
+    /** Explicit inactive progress track; it must remain visible against the panel in both themes. */
+    var progressTrack = Color.rgb(108, 119, 125); private set
+    var progressTrackDisabled = Color.rgb(76, 87, 93); private set
     var text = Color.rgb(245, 243, 238); private set
     var secondary = Color.rgb(179, 187, 190); private set
     var accent = Color.rgb(221, 187, 132); private set
@@ -33,6 +36,8 @@ object Design {
         background = Color.parseColor(if (light) "#F2F0EB" else "#101418")
         panel = Color.parseColor(if (light) "#FFFFFF" else "#1B2127")
         raised = Color.parseColor(if (light) "#E2E2DD" else "#282F35")
+        progressTrack = Color.parseColor(if (light) "#687277" else "#6C777D")
+        progressTrackDisabled = Color.parseColor(if (light) "#A7AFB1" else "#4C575D")
         text = Color.parseColor(if (light) "#161B20" else "#F5F3EE")
         secondary = if (contrast) text else Color.parseColor(if (light) "#565F65" else "#B3BBBE")
         accent = Color.parseColor(if (light) "#815815" else "#DDBB84")

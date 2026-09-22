@@ -52,6 +52,22 @@ class TrackDetailsViewTest {
         view.updateRepeat(Player.REPEAT_MODE_OFF,false)
         assertFalse(repeat.isEnabled)
     }
+
+    @Test fun widePanelsUseDescriptivePlaybackLabelsAndBalancedWidths() {
+        RuntimeEnvironment.setQualifiers("w600dp-h400dp-land-mdpi")
+        val view=TrackDetailsView(RuntimeEnvironment.getApplication(),{}, {})
+        val order=view.findViewById<TouchButton>(R.id.player_order_toggle)
+        val repeat=view.findViewById<TouchButton>(R.id.player_repeat_toggle)
+        view.updateOrder(false,true)
+        view.updateRepeat(Player.REPEAT_MODE_OFF,true)
+        view.measure(View.MeasureSpec.makeMeasureSpec(520,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(120,View.MeasureSpec.EXACTLY))
+        view.layout(0,0,520,120)
+        assertEquals("顺序播放",order.text.toString())
+        assertEquals("循环：关",repeat.text.toString())
+        val buttons=listOf(R.id.player_lyrics_toggle,R.id.player_order_toggle,R.id.player_repeat_toggle,R.id.player_offline).map { view.findViewById<View>(it) }
+        assertTrue(buttons.maxOf { it.width } - buttons.minOf { it.width } <= 1)
+        assertTrue(buttons.all { (it as TextView).layout.lineCount == 1 && it.layout.getEllipsisCount(0) == 0 })
+    }
     @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
     @Test fun secondaryButtonsRemainReadableAndStableWithLargeText() {
         for((width,font) in listOf(403 to 1f,300 to 1f,296 to 1.6f,300 to 1.6f,312 to 1.6f)) {
