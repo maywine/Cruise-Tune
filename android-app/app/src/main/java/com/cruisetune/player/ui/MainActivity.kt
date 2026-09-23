@@ -43,6 +43,7 @@ import com.cruisetune.player.data.JsonCodec
 import com.cruisetune.player.playback.PlaybackService
 import com.cruisetune.player.steering.*
 import com.cruisetune.player.dashboard.*
+import com.cruisetune.player.startup.StartupNotice
 import com.cruisetune.player.startup.StartupSettings
 import com.cruisetune.player.ui.Design.dp
 import com.google.common.util.concurrent.ListenableFuture
@@ -115,7 +116,10 @@ class MainActivity : CruiseActivity() {
     private var settingsDialog: AlertDialog? = null
     private var refreshingAppearance = false
 
-    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted && app.preferences.getBoolean(StartupSettings.ENABLED, false))
+            toast("请在系统设置中允许 Cruise Tune 通知，否则开机入口无法显示")
+    }
     private val localDirectory = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri == null) return@registerForActivityResult
         try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -215,6 +219,10 @@ class MainActivity : CruiseActivity() {
                 }
             }
         }
+    }
+    override fun onResume() {
+        super.onResume()
+        StartupNotice.dismiss(this)
     }
     private fun buildScreen() {
         detailsBack.isEnabled=detailsExpanded
@@ -962,8 +970,8 @@ class MainActivity : CruiseActivity() {
         toggle(content, "打开应用时继续播放", "resumeOnOpen", false)
         paragraph(content, "熄屏时自动暂停并保存进度，亮屏后点击继续播放。")
         section(content,"启动")
-        toggle(content, "开机启动应用", StartupSettings.ENABLED, false)
-        paragraph(content, "设备开机完成后打开 Cruise Tune；是否自动继续播放仍由上面的播放开关决定。")
+        toggle(content, "开机显示播放器入口", StartupSettings.ENABLED, false)
+        paragraph(content, "设备开机后显示通知，点按进入 Cruise Tune 并恢复上次队列。Android 13 起需允许通知；是否继续播放仍由上面的播放开关决定。")
         section(content,"车辆")
         action(content, "方向盘按键") { dialog.dismiss(); showSteeringSettings() }
         action(content, "仪表媒体显示") { dialog.dismiss(); showDashboardSettings() }
@@ -1197,6 +1205,12 @@ class MainActivity : CruiseActivity() {
                 if (key in listOf("dayMode","highContrast","reduceTransparency")) refreshAppearance()
                 else if(key=="reduceMotion") {
                     panels.keys.toList().filter { it.isShowing }.forEach { Design.styleDialog(it,this@MainActivity) }
+                } else if (key == StartupSettings.ENABLED && checked && Build.VERSION.SDK_INT >= 33 &&
+                    ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    if (app.preferences.getBoolean("notificationAsked", false))
+                        toast("请在系统设置中允许 Cruise Tune 通知，否则开机入口无法显示")
+                    else askNotificationPermission()
                 }
             }
         }, LinearLayout.LayoutParams(-1, -2))

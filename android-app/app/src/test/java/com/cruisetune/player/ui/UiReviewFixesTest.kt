@@ -367,7 +367,7 @@ class UiReviewFixesTest {
             val activity = controller.get()
             views(activity.window.decorView).filterIsInstance<TouchButton>().first { it.text.toString() == "设置" }.performClick()
             val dialog = ShadowDialog.getLatestDialog()
-            val startup = views(dialog.window!!.decorView).filterIsInstance<CalmSwitch>().single { it.text.toString() == "开机启动应用" }
+            val startup = views(dialog.window!!.decorView).filterIsInstance<CalmSwitch>().single { it.text.toString() == "开机显示播放器入口" }
             assertFalse(startup.isChecked)
             startup.isChecked = true
             assertTrue(StartupSettings(app.preferences).enabled)

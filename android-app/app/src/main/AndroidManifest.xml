@@ -41,6 +41,7 @@
         <receiver android:name=".startup.BootReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
         <receiver android:name="androidx.media3.session.MediaButtonReceiver" android:exported="true">
