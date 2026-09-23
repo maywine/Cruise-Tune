@@ -199,8 +199,10 @@ internal class ResolvingTrackSource(
                 return source.open(dataSpec.buildUpon().setUri(resolved.url).setHttpRequestHeaders(resolved.headers).build())
             } catch (e: HttpDataSource.InvalidResponseCodeException) {
                 source.close(); delegate = null
-                if (attempt == 1 || e.responseCode !in listOf(401, 403)) throw e
-                onAuthorizationFailure(track, resolved)
+                if (attempt == 1 || e.responseCode !in listOf(401, 403, 404)) throw e
+                // A 404 may be an expired download URL. Resolve the file ID again before
+                // treating any provider response as evidence that the file disappeared.
+                if (e.responseCode != 404) onAuthorizationFailure(track, resolved)
             } catch (e: IOException) { source.close(); delegate = null; throw e }
         }
         throw UserError("读取失败，请重新连接夸克")

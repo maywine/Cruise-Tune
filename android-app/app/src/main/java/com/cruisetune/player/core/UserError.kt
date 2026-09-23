@@ -3,6 +3,7 @@ package com.cruisetune.player.core
 import java.io.IOException
 
 class UserError(message: String, val needsLogin: Boolean = false, val retryable: Boolean = false) : IOException(message)
+class ConfirmedRemoteFileMissing : IOException("夸克文件已不可用")
 class InvalidMediaRange : java.net.ProtocolException("下载分段信息不匹配，已停止读取以保护缓存")
 
 /** Media3 wraps provider failures; retain the actionable, sanitized cause. */
@@ -16,7 +17,10 @@ fun userError(error: Throwable?): UserError? {
     return null
 }
 
-fun readableError(error: Throwable): String = userError(error)?.message ?: when (error) {
+fun confirmedRemoteFileMissing(error: Throwable?): ConfirmedRemoteFileMissing? =
+    generateSequence(error) { it.cause }.take(16).filterIsInstance<ConfirmedRemoteFileMissing>().firstOrNull()
+
+fun readableError(error: Throwable): String = userError(error)?.message ?: confirmedRemoteFileMissing(error)?.message ?: when (error) {
     is InvalidMediaRange -> error.message ?: "下载分段信息不匹配"
     is UserError -> error.message ?: "暂时无法完成，请稍后重试"
     is java.net.UnknownHostException -> "暂无网络，已保留播放位置"

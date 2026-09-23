@@ -335,6 +335,20 @@ class UiReviewFixesTest {
             assertTrue(holder.row.isSelected)
         }
     }
+    @Test fun confirmedMissingCloudSongIsMarkedWithoutChangingTheQueue() {
+        val context=RuntimeEnvironment.getApplication()
+        val adapter=TrackAdapter(false){}
+        val tracks=listOf(Track("gone","source","fid-1","Gone",relativePath="gone.flac"),
+            Track("next","source","fid-2","Next",relativePath="next.flac"))
+        adapter.submitList(tracks);shadowOf(Looper.getMainLooper()).idle()
+        val holder=adapter.onCreateViewHolder(android.widget.FrameLayout(context),0)
+        adapter.updateMissing(setOf("gone"));adapter.onBindViewHolder(holder,0)
+        assertTrue(holder.title.text.toString().startsWith("云端失效"))
+        assertTrue(holder.row.contentDescription.toString().contains("云端文件已失效"))
+        assertEquals(tracks,adapter.currentList)
+        adapter.updateMissing(emptySet());adapter.onBindViewHolder(holder,0)
+        assertEquals("Gone",holder.title.text.toString())
+    }
     @Test fun appearanceChangesKeepTheSameSettingsPanelOpen() {
         RuntimeEnvironment.setQualifiers("w853dp-h480dp-land-mdpi")
         val controller=Robolectric.buildActivity(MainActivity::class.java).create().start().resume().visible()

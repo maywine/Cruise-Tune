@@ -18,6 +18,13 @@ class TrackAdapter(private val compact: Boolean = false, private val select: (Tr
 }) {
     var currentId: String? = null; private set
     private var playbackLabel = "已暂停"
+    private var missingIds = emptySet<String>()
+    fun updateMissing(ids: Set<String>) {
+        if (ids == missingIds) return
+        val changed = (missingIds union ids) - (missingIds intersect ids)
+        missingIds = ids.toSet()
+        changed.forEach { id -> currentList.indexOfFirst { it.id == id }.takeIf { it >= 0 }?.let(::notifyItemChanged) }
+    }
     fun updatePlayback(id: String?, state: String) {
         if (id == currentId && state == playbackLabel) return
         val affected = listOf(currentId, id).distinct().mapNotNull { key -> currentList.indexOfFirst { it.id == key }.takeIf { it >= 0 } }
@@ -48,15 +55,16 @@ class TrackAdapter(private val compact: Boolean = false, private val select: (Tr
     }
     override fun onBindViewHolder(holder: Holder, position: Int) {
         val track = getItem(position); val selected = track.id == currentId
-        holder.title.text = track.title
-        holder.number.text = if (selected) (if (playbackLabel == "正在播放") "▥" else "•") else (position + 1).toString().padStart(2, '0')
-        holder.number.setTextColor(if (selected) Design.accent else Design.secondary)
+        val missing = track.id in missingIds
+        holder.title.text = if (missing) "云端失效 · ${track.title}" else track.title
+        holder.number.text = if (missing) "!" else if (selected) (if (playbackLabel == "正在播放") "▥" else "•") else (position + 1).toString().padStart(2, '0')
+        holder.number.setTextColor(if (missing) Design.danger else if (selected) Design.accent else Design.secondary)
         val format = track.relativePath.substringAfterLast('.', "音频").uppercase()
         holder.subtitle.text = "${if (track.localUri.isNotEmpty()) "本地" else "夸克网盘"}  ·  $format"
         holder.row.background = Design.surface(if (selected) Design.raised else Design.panel, holder.row.context.dp(16).toFloat())
         val attrs = holder.row.context.obtainStyledAttributes(intArrayOf(android.R.attr.selectableItemBackground))
         holder.row.foreground = attrs.getDrawable(0); attrs.recycle()
-        holder.row.contentDescription = "${track.title}，${holder.subtitle.text}${if (selected) "，当前歌曲，$playbackLabel" else ""}"
+        holder.row.contentDescription = "${track.title}，${holder.subtitle.text}${if (missing) "，云端文件已失效" else ""}${if (selected) "，当前歌曲，$playbackLabel" else ""}"
         holder.row.isSelected = selected
         holder.row.setOnClickListener { select(track) }
     }

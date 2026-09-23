@@ -33,6 +33,7 @@ Gradle 自动生成 AIDL 等构建输入。单元测试使用 Robolectric、合�
 | 测试类 | 检查内容 | 所需素材 |
 | --- | --- | --- |
 | `LibraryActionsDeviceTest` | 目录移除、排序与播放状态保留 | 无，运行时生成 |
+| `DeletedQuarkTrackDeviceTest` | 云端失效自动跳过、队列标记、普通错误保留当前歌曲、完整缓存播放 | 无，运行时生成 |
 | `PlayerDetailsDeviceTest` | 封面、同目录歌词与离线下载 | 基础 FLAC |
 | `QueueFollowDeviceTest` | 队列跟随与手动浏览 | 基础 FLAC |
 | `PlaybackOrderDeviceTest` | 顺序切换与播放连续性 | 基础 FLAC |

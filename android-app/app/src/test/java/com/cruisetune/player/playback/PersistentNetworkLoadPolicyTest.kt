@@ -37,6 +37,10 @@ class PersistentNetworkLoadPolicyTest {
         assertEquals(C.TIME_UNSET,p.getRetryDelayMsFor(info(UserError("Expired",needsLogin=true),1)))
         assertEquals(C.TIME_UNSET,p.getRetryDelayMsFor(info(InvalidMediaRange(),1)))
         assertFalse(NetworkRetry.isTransient(java.io.FileNotFoundException()))
+        val confirmedMissing = HttpDataSource.HttpDataSourceException(ConfirmedRemoteFileMissing(), spec,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED, HttpDataSource.HttpDataSourceException.TYPE_OPEN)
+        assertFalse(NetworkRetry.isTransient(confirmedMissing))
+        assertEquals(C.TIME_UNSET,p.getRetryDelayMsFor(info(confirmedMissing,1)))
     }
     @Test fun parserAndLocalEofDoNotRetryEvenWhenWrapped() {
         val p = PersistentNetworkLoadPolicy()

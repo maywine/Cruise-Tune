@@ -415,6 +415,7 @@ class MainActivity : CruiseActivity() {
         } else libraryTracks()
         queueFollower.update(showingQueue,c?.currentMediaItem?.mediaId,tracks)
         val listAdapter=adapter;val listView=recycler
+        listAdapter.updateMissing(c?.sessionExtras?.getStringArrayList("missingTrackIds")?.toSet() ?: emptySet())
         fun committed() {
             if(adapter!==listAdapter || recycler!==listView || listAdapter.currentList!=submittedTracks)return
             if(pendingListStart)(listView.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0,0)

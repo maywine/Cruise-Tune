@@ -1,6 +1,7 @@
 package com.cruisetune.player.data
 
 import com.cruisetune.player.core.UserError
+import com.cruisetune.player.core.ConfirmedRemoteFileMissing
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
@@ -59,6 +60,30 @@ class QuarkApiTest {
         assertNotEquals(first.url, second.url)
         assertEquals(cookie, second.headers["Cookie"])
         repeat(2) { assertEquals("song", JSONObject(server.takeRequest().body.readUtf8()).getJSONArray("fids").getString(0)) }
+    }
+    @Test fun twoSuccessfulEmptyDownloadResultsConfirmTheFileIsMissing() = runBlocking {
+        repeat(2) { server.enqueue(MockResponse().setBody("""{"status":200,"code":0,"data":[]}""")) }
+        val error = runCatching { api.resolve("removed-song") }.exceptionOrNull()
+        assertTrue(error is ConfirmedRemoteFileMissing)
+        assertEquals(2, server.requestCount)
+    }
+    @Test fun aTemporaryEmptyDownloadResultDoesNotSkipAReturningFile() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"status":200,"code":0,"data":[]}"""))
+        server.enqueue(MockResponse().setBody("""{"status":200,"code":0,"data":[{"fid":"song","download_url":"https://pdds.quark.cn/song"}]}"""))
+        assertEquals("https://pdds.quark.cn/song", api.resolve("song").url)
+        assertEquals(2, server.requestCount)
+    }
+    @Test fun aLoginFailureDuringConfirmationIsNotCalledADeletedFile() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"status":200,"code":0,"data":[]}"""))
+        server.enqueue(MockResponse().setResponseCode(401))
+        val error = runCatching { api.resolve("song") }.exceptionOrNull()
+        assertTrue(error is UserError && error.needsLogin)
+        assertEquals(2, server.requestCount)
+    }
+    @Test fun aMismatchedDownloadResultIsNotCalledADeletedFile() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"status":200,"code":0,"data":[{"fid":"another-song","download_url":"https://pdds.quark.cn/another"}]}"""))
+        assertTrue(runCatching { api.resolve("song") }.exceptionOrNull() is UserError)
+        assertEquals(1, server.requestCount)
     }
     @Test fun webAudioUsesVerifiedPcProfileAndPassesRotatedCookieToRangeReader() = runBlocking {
         server.enqueue(MockResponse().setBody(page(emptyList(), 0)))

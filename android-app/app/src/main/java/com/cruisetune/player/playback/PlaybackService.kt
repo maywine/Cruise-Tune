@@ -62,6 +62,7 @@ class PlaybackService : MediaLibraryService() {
     private var capacityMessage: String? = null
     private var prefetchGate = "未调度"
     private val recoveryPolicy = PlaybackRecoveryPolicy()
+    private val missingTrackIds = linkedSetOf<String>()
     private val stallTracker = PlaybackStallTracker()
     private data class Recovery(val track: Track, val bypass: MediaCache.Bypass, val position: Long,
         var rebuilding: Boolean = false, var networkFailures: Int = 0)
@@ -276,6 +277,7 @@ class PlaybackService : MediaLibraryService() {
     private fun persist() { if (!applying && entries.isNotEmpty()) save(snapshot()) }
     private fun updateExtras(error: String? = null) {
         session.setSessionExtras(Bundle().apply { putBoolean("shuffled", shuffled); if(entries.isNotEmpty())queueSort?.let { putString("queueSort", it.name) }; putBoolean("needsLogin", userError(player.playerError)?.needsLogin == true); if (packageName.endsWith(".authcheck")) putString("prefetchGate", prefetchGate); (capacityMessage ?: prefetchMessage)?.let { putString("prefetchStatus", it) };
+            if (missingTrackIds.isNotEmpty()) putStringArrayList("missingTrackIds", ArrayList(missingTrackIds))
             recoveryNotice?.let { putString("recoveryStatus", it) }
             (error ?: player.playerError?.let { readableError(it.cause ?: it) })?.let { putString("error", it) } })
     }
@@ -321,6 +323,9 @@ class PlaybackService : MediaLibraryService() {
         if (!ready.isCompleted || !player.playWhenReady || screenOff.isScreenOff() ||
             player.playbackSuppressionReason != Player.PLAYBACK_SUPPRESSION_REASON_NONE) return
         val attempt = recovery
+        if (PlaybackRecoveryPolicy.isConfirmedMissing(error)) {
+            scheduleMissingSkip(track, error); return
+        }
         if (attempt != null && NetworkRetry.isTransient(error)) {
             retryRecoveryNetworkFailure(error, attempt); return
         }
@@ -329,6 +334,25 @@ class PlaybackService : MediaLibraryService() {
             cancelRecovery(); updateExtras(readableError(error.cause ?: error)); return
         }
         scheduleRecovery(track, error, stalled)
+    }
+    private fun scheduleMissingSkip(track: Track, error: PlaybackException) {
+        val generation = recoveryGeneration
+        recoveryAction?.cancel()
+        recoveryAction = scope.launch {
+            try {
+                yield()
+                commandLock.withLock {
+                    if (generation != recoveryGeneration || player.currentMediaItem?.mediaId != track.id ||
+                        player.playerError !== error || !player.playWhenReady || screenOff.isScreenOff() ||
+                        player.playbackSuppressionReason != Player.PLAYBACK_SUPPRESSION_REASON_NONE) return@withLock
+                    skipFailedTrack(track, missing = true)
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) {
+                cancelRecovery(); player.pause(); persistedIntent = false
+                updateExtras("自动跳过未完成，请手动切换歌曲")
+            }
+        }
     }
     private fun canRecoverStalledCache(track: Track) = app.media.canRepairStreaming(track) && app.media.hasCompleteStreamingCache(track)
     private fun checkPlaybackStall() {
@@ -381,11 +405,12 @@ class PlaybackService : MediaLibraryService() {
             }
         }
     }
-    private fun skipFailedTrack(track: Track) {
+    private fun skipFailedTrack(track: Track, missing: Boolean = false) {
         stallTracker.reset()
         recovery?.let { app.media.endBypass(it.bypass) }; recovery = null
         recoveryRepair?.cancel(); recoveryRepair = null
         recoveryPolicy.failed(track.cacheKey)
+        if (missing) missingTrackIds += track.id
         val next = recoveryPolicy.nextIndex(entries.map { it.track.cacheKey }, player.currentMediaItemIndex) { index ->
             val repeat = if (player.repeatMode == Player.REPEAT_MODE_ONE) Player.REPEAT_MODE_OFF else player.repeatMode
             player.currentTimeline.getNextWindowIndex(index, repeat, player.shuffleModeEnabled)
@@ -395,16 +420,19 @@ class PlaybackService : MediaLibraryService() {
             if (next == null) {
                 if (player.playbackState != Player.STATE_IDLE) player.stop()
                 player.pause(); persistedIntent = false
-                recoveryNotice = "没有可继续播放的歌曲，请检查文件后重试"
+                recoveryNotice = if (missing) "云端歌曲已失效，没有可继续播放的歌曲" else "没有可继续播放的歌曲，请检查文件后重试"
             } else {
                 cancelPrefetch()
                 player.seekTo(next, 0); prepareAndPlay()
-                recoveryNotice = "已跳过无法播放的歌曲"; clearRecoveryNoticeOnProgress = true
+                recoveryNotice = if (missing) "已跳过云端失效的歌曲" else "已跳过无法播放的歌曲"
+                clearRecoveryNoticeOnProgress = true
             }
         } finally { automaticPlaybackChange = false }
         persist(); updateExtras()
     }
     private fun checkRecoveryProgress() {
+        val currentId = entries.getOrNull(player.currentMediaItemIndex)?.track?.id
+        if (player.isPlaying && player.currentPosition >= 1500 && currentId != null && missingTrackIds.remove(currentId)) updateExtras()
         if (clearRecoveryNoticeOnProgress && player.isPlaying && player.currentPosition >= 1500) {
             recoveryNotice = null; clearRecoveryNoticeOnProgress = false; updateExtras()
         }
@@ -454,6 +482,7 @@ class PlaybackService : MediaLibraryService() {
         val index = tracks.indexOfFirst { it.id == id }
         if (index < 0) throw UserError("歌曲已不在目录中，请刷新后重试")
         applying = true
+        missingTrackIds.clear()
         entries = tracks.mapIndexed { i, t -> QueueEntry(t, i) }
         revision = maxOf(revision + 1, System.currentTimeMillis())
         shuffled = false; persistedIntent = true
@@ -481,6 +510,7 @@ class PlaybackService : MediaLibraryService() {
             writes.send(DiskWrite({ app.library.removeSources(ids, remaining) }, completion))
             completion.await()
             entries = remaining.entries; revision = remaining.revision; persistedIntent = remaining.playIntent
+            missingTrackIds.retainAll(entries.map { it.track.id }.toSet())
             if (entries.isEmpty()) player.clearMediaItems()
             else player.setMediaItems(entries.map { app.media.mediaItem(it.track) }, remaining.index, remaining.positionMs)
             (offlineRequests + app.media.downloadManager.currentDownloads.filter { it.request.uri.lastPathSegment in removedIds }.map { it.request.id })

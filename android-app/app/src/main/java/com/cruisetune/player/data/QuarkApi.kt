@@ -78,15 +78,22 @@ class QuarkApi(
     override suspend fun resolve(fileId: String): ReadRequest {
         // Verified with a web-authorized FLAC above 50 MiB. Playback still reads only
         // requested byte ranges; this does not change the OAuth/Token provider.
-        val reply = request("file/download", query = mapOf("sys" to "win32", "ve" to PC_CLIENT_VERSION, "ut" to "", "guid" to ""),
-            body = JSONObject().put("fids", JSONArray().put(fileId)), userAgent = PC_DOWNLOAD_USER_AGENT)
-        val data = reply.json.optJSONArray("data") ?: throw UserError("暂时无法获取夸克文件地址")
-        val match = (0 until data.length()).map { data.getJSONObject(it) }.firstOrNull { it.optString("fid", fileId) == fileId }
-            ?: throw UserError("夸克文件已不可用")
-        val url = match.optString("download_url").ifEmpty { throw UserError("夸克尚未提供可用下载地址") }.toHttpUrl()
-        val trusted = listOf("quark.cn", "uc.cn", "ucweb.com").any { url.host == it || url.host.endsWith(".$it") }
-        if (url.scheme != "https" || !trusted) throw UserError("夸克下载域名已变化，需要更新接入适配")
-        return ReadRequest(url.toString(), mapOf("Cookie" to reply.cookie, "Referer" to REFERER, "User-Agent" to PC_DOWNLOAD_USER_AGENT))
+        for (attempt in 0..1) {
+            val reply = request("file/download", query = mapOf("sys" to "win32", "ve" to PC_CLIENT_VERSION, "ut" to "", "guid" to ""),
+                body = JSONObject().put("fids", JSONArray().put(fileId)), userAgent = PC_DOWNLOAD_USER_AGENT)
+            val data = reply.json.optJSONArray("data") ?: throw UserError("暂时无法获取夸克文件地址")
+            if (data.length() == 0) {
+                if (attempt == 0) continue
+                throw ConfirmedRemoteFileMissing()
+            }
+            val match = (0 until data.length()).map { data.getJSONObject(it) }.firstOrNull { it.optString("fid", fileId) == fileId }
+                ?: throw UserError("夸克返回的下载文件不匹配")
+            val url = match.optString("download_url").ifEmpty { throw UserError("夸克尚未提供可用下载地址") }.toHttpUrl()
+            val trusted = listOf("quark.cn", "uc.cn", "ucweb.com").any { url.host == it || url.host.endsWith(".$it") }
+            if (url.scheme != "https" || !trusted) throw UserError("夸克下载域名已变化，需要更新接入适配")
+            return ReadRequest(url.toString(), mapOf("Cookie" to reply.cookie, "Referer" to REFERER, "User-Agent" to PC_DOWNLOAD_USER_AGENT))
+        }
+        error("Unreachable download resolution state")
     }
 
     private fun cookie(): String = readCookie()?.takeIf { validCookie(it) } ?: throw UserError("夸克账号需重新连接", true)

@@ -7,6 +7,7 @@ import androidx.media3.datasource.FileDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.decoder.flac.FlacDecodeErrors
 import com.cruisetune.player.core.userError
+import com.cruisetune.player.core.confirmedRemoteFileMissing
 import java.io.EOFException
 
 /** Budgets survive automatic skips, so repeat modes cannot loop forever through broken files. */
@@ -30,6 +31,7 @@ internal class PlaybackRecoveryPolicy {
     }
 
     companion object {
+        fun isConfirmedMissing(error: Throwable): Boolean = confirmedRemoteFileMissing(error) != null
         fun isProgressFailure(error: Throwable): Boolean = !isSharedFailure(error) &&
             generateSequence(error) { it.cause }.take(16).filterIsInstance<StuckPlayerException>().any {
                 it.stuckType == StuckPlayerException.STUCK_PLAYING_NO_PROGRESS ||

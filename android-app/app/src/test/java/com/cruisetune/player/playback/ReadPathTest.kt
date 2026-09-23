@@ -43,6 +43,52 @@ class ReadPathTest {
         assertTrue(runCatching { source.open(spec) }.exceptionOrNull() is UserError)
         assertFalse(resolved)
     }
+    @Test fun downloadUrlNotFoundRefreshesTheUrlOnceWithoutChangingTheRange() {
+        var resolves = 0
+        var authRefreshes = 0
+        val opened = mutableListOf<DataSpec>()
+        val source = ResolvingTrackSource({ track }, { ReadRequest("https://pdds.quark.cn/file?token=${++resolves}", emptyMap()) }, DataSource.Factory {
+            object : EmptySource() {
+                override fun open(dataSpec: DataSpec): Long {
+                    opened += dataSpec
+                    if (opened.size == 1) throw HttpDataSource.InvalidResponseCodeException(404, "Not Found", null, emptyMap(), dataSpec, byteArrayOf())
+                    return dataSpec.length
+                }
+            }
+        }, { _, _ -> authRefreshes++ })
+        val spec = DataSpec.Builder().setUri("cruisetune://track/song").setKey(track.cacheKey).setPosition(81000).setLength(4096).build()
+        assertEquals(4096, source.open(spec))
+        assertEquals(2, resolves)
+        assertEquals(0, authRefreshes)
+        opened.forEach { assertEquals(81000, it.position); assertEquals(4096, it.length); assertEquals(track.cacheKey, it.key) }
+        source.close()
+    }
+    @Test fun repeatedDownloadUrl404IsNotProofOfADeletedFile() {
+        var resolves = 0
+        val source = ResolvingTrackSource({ track }, { ReadRequest("https://pdds.quark.cn/file?token=${++resolves}", emptyMap()) }, DataSource.Factory {
+            object : EmptySource() {
+                override fun open(dataSpec: DataSpec): Long = throw HttpDataSource.InvalidResponseCodeException(404, "Not Found", null, emptyMap(), dataSpec, byteArrayOf())
+            }
+        })
+        val error = runCatching { source.open(DataSpec.Builder().setUri("cruisetune://track/song").setKey(track.cacheKey).build()) }.exceptionOrNull()
+        assertTrue(error is HttpDataSource.InvalidResponseCodeException)
+        assertNull(confirmedRemoteFileMissing(error))
+        assertEquals(2, resolves)
+    }
+    @Test fun providerConfirmationAfterA404IsExposedAsAMissingFile() {
+        var resolves = 0
+        val source = ResolvingTrackSource({ track }, {
+            if (++resolves == 2) throw ConfirmedRemoteFileMissing()
+            ReadRequest("https://pdds.quark.cn/file", emptyMap())
+        }, DataSource.Factory {
+            object : EmptySource() {
+                override fun open(dataSpec: DataSpec): Long = throw HttpDataSource.InvalidResponseCodeException(404, "Not Found", null, emptyMap(), dataSpec, byteArrayOf())
+            }
+        })
+        val error = runCatching { source.open(DataSpec.Builder().setUri("cruisetune://track/song").setKey(track.cacheKey).build()) }.exceptionOrNull()
+        assertTrue(error is ConfirmedRemoteFileMissing)
+        assertEquals(2, resolves)
+    }
     @Test fun persistentAuthorizationErrorHasBoundedRetry() {
         var attempts = 0
         val source = ResolvingTrackSource({ track }, { ReadRequest("https://pdds.quark.cn/file", emptyMap()) }, DataSource.Factory {
