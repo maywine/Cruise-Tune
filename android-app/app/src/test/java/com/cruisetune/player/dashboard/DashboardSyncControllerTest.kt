@@ -8,6 +8,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.runCurrent
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -21,8 +22,14 @@ import org.robolectric.annotation.Config
 class DashboardSyncControllerTest {
     private class FakeTransport : DashboardTransport {
         val sent = mutableListOf<Intent>()
+        var failuresRemaining = 0
+        var attempts = 0
         override fun inspect() = DashboardEndpoint(DashboardEndpointKind.READY, "测试接收器已准备", "1.0", 1000, true)
-        override fun dispatch(intent: Intent): DashboardDispatch { sent += Intent(intent); return DashboardDispatch.Dispatched }
+        override fun dispatch(intent: Intent): DashboardDispatch {
+            attempts++
+            if (failuresRemaining > 0) { failuresRemaining--; return DashboardDispatch.Failed("Temporary failure", true) }
+            sent += Intent(intent); return DashboardDispatch.Dispatched
+        }
     }
 
     private fun snapshot(state: DashboardPlaybackState, position: Long = 1_000) = DashboardSnapshot(
@@ -75,10 +82,84 @@ class DashboardSyncControllerTest {
         advanceUntilIdle()
         assertEquals(listOf(2), transport.sent.map { it.getIntExtra("RECEIVER_MEDIA_PLAY_STATUS", -1) })
 
+        repeat(5) {
+            controller.onPendingPlayback(DashboardInput(snapshot(DashboardPlaybackState.PAUSED)))
+            advanceTimeBy(2_000); runCurrent()
+        }
+        assertEquals("Idle updates must not republish a successful snapshot", 1, transport.sent.size)
+        controller.requestResend(); advanceUntilIdle()
+        assertEquals("Manual recheck must work before playback", 2, transport.sent.size)
+
         controller.onPlayback(DashboardInput(snapshot(DashboardPlaybackState.PLAYING)))
         advanceTimeBy(200); advanceUntilIdle()
-        assertEquals(listOf(2, 3), transport.sent.map { it.getIntExtra("RECEIVER_MEDIA_PLAY_STATUS", -1) })
+        assertEquals(listOf(2, 2, 3), transport.sent.map { it.getIntExtra("RECEIVER_MEDIA_PLAY_STATUS", -1) })
         controller.close()
+    }
+
+    @Test fun pendingPublicationWaitsForInspectionAndInvalidationCancelsIt() = runTest {
+        val context = RuntimeEnvironment.getApplication() as Application
+        val preferences = context.getSharedPreferences("dashboard-pending-inspection", Context.MODE_PRIVATE).apply {
+            edit().clear().putBoolean(DashboardSettings.ENABLED, true).commit()
+        }
+        val io = StandardTestDispatcher(testScheduler)
+        for (invalidated in listOf(false, true)) {
+            val transport = FakeTransport()
+            val controller = DashboardSyncController(this, DashboardSettings(preferences), preferences, transport,
+                MutableStateFlow(DashboardStatus()), elapsedMs = { testScheduler.currentTime }, ioDispatcher = io)
+            controller.onPendingPlayback(DashboardInput(snapshot(DashboardPlaybackState.PAUSED)))
+            if (invalidated) controller.invalidate("熄屏")
+            advanceUntilIdle()
+            assertEquals(if (invalidated) 0 else 1, transport.sent.size)
+            controller.close()
+        }
+    }
+
+    @Test fun pendingPublicationRetriesStayBoundedAcrossIdleUpdatesAndAllowManualRetry() = runTest {
+        val context = RuntimeEnvironment.getApplication() as Application
+        val preferences = context.getSharedPreferences("dashboard-pending-retry", Context.MODE_PRIVATE).apply {
+            edit().clear().putBoolean(DashboardSettings.ENABLED, true).commit()
+        }
+        val transport = FakeTransport().apply { failuresRemaining = 4 }
+        val controller = DashboardSyncController(this, DashboardSettings(preferences), preferences, transport,
+            MutableStateFlow(DashboardStatus()), elapsedMs = { testScheduler.currentTime }, ioDispatcher = StandardTestDispatcher(testScheduler))
+        controller.onPendingPlayback(DashboardInput(snapshot(DashboardPlaybackState.PAUSED)))
+        runCurrent()
+        repeat(20) {
+            advanceTimeBy(2_000); runCurrent()
+            controller.onPendingPlayback(DashboardInput(snapshot(DashboardPlaybackState.PAUSED)))
+            runCurrent()
+        }
+        assertEquals("One initial dispatch and three retries", 4, transport.attempts)
+        assertTrue(transport.sent.isEmpty())
+        controller.requestResend(); advanceUntilIdle()
+        assertEquals(5, transport.attempts)
+        assertEquals(2, transport.sent.single().getIntExtra("RECEIVER_MEDIA_PLAY_STATUS", -1))
+        controller.close()
+    }
+
+    @Test fun pendingRetryDoesNotResurrectAfterPlaybackSelectionOrDisablingSync() = runTest {
+        val context = RuntimeEnvironment.getApplication() as Application
+        val preferences = context.getSharedPreferences("dashboard-pending-cancel", Context.MODE_PRIVATE)
+        for (cancel in listOf("screenOff", "disabled", "selection", "playing", "close")) {
+            preferences.edit().clear().putBoolean(DashboardSettings.ENABLED, true).commit()
+            val transport = FakeTransport().apply { failuresRemaining = 1 }
+            val controller = DashboardSyncController(this, DashboardSettings(preferences), preferences, transport,
+                MutableStateFlow(DashboardStatus()), elapsedMs = { testScheduler.currentTime }, ioDispatcher = StandardTestDispatcher(testScheduler))
+            controller.onPendingPlayback(DashboardInput(snapshot(DashboardPlaybackState.PAUSED)))
+            runCurrent()
+            assertEquals(1, transport.attempts)
+            when (cancel) {
+                "screenOff" -> { controller.invalidate("熄屏"); controller.requestResend() }
+                "disabled" -> preferences.edit().putBoolean(DashboardSettings.ENABLED, false).commit()
+                "selection" -> controller.onPlayback(DashboardInput(snapshot(DashboardPlaybackState.PAUSED).copy(trackId = "other")))
+                "playing" -> controller.onPlayback(DashboardInput(snapshot(DashboardPlaybackState.PLAYING)))
+                "close" -> controller.close()
+            }
+            advanceUntilIdle()
+            assertEquals(cancel, if (cancel == "playing") 2 else 1, transport.attempts)
+            assertTrue(cancel, transport.sent.all { it.getIntExtra("RECEIVER_MEDIA_PLAY_STATUS", -1) == 3 })
+            controller.close()
+        }
     }
 
     @Test fun disablingSyncClearsTheLastPlayingState() = runTest {

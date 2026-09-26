@@ -37,8 +37,11 @@ Gradle 自动生成 AIDL 等构建输入。单元测试使用 Robolectric、合�
 | `PlayerDetailsDeviceTest` | 封面、同目录歌词与离线下载 | 基础 FLAC |
 | `QueueFollowDeviceTest` | 队列跟随与手动浏览 | 基础 FLAC |
 | `PlaybackOrderDeviceTest` | 顺序切换与播放连续性 | 基础 FLAC |
+| `DashboardStartupDeviceTest` | 启动恢复、待播放广播、延迟补发、重试与取消 | 基础 FLAC |
 | `EmbeddedLyricsDeviceTest` | 内嵌歌词、优先级与纯文本显示 | 全部素材 |
 | `TrackTransitionDeviceTest` | 切歌后的封面与歌词归属 | 全部素材 |
+
+`DashboardStartupDeviceTest` 调用开机广播入口生成通知，再执行通知入口打开应用，使用真实播放服务与测试内接收器验证 Android 广播内容和时序；仅替换仪表接收器的发现与传输，不修改正式包的目标组件或权限检查。它不会重启模拟器，熄屏／亮屏通过注入对应回调验证，原车接收器、实际开机与物理屏幕行为仍需实车确认。
 
 ### 生成素材
 

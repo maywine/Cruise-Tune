@@ -39,6 +39,7 @@ internal class DashboardSyncController(
     private var epoch = 0L
     private var latest: DashboardInput? = null
     private var pendingPlaybackRequested = false
+    private var pendingPlaybackSignature: String? = null
     private var lastSentSnapshot: DashboardSnapshot? = null
     private var clearRequested = false
     private var lastSignature: String? = null
@@ -58,10 +59,7 @@ internal class DashboardSyncController(
 
     fun onPlayback(input: DashboardInput, tick: Boolean = false) {
         if (closed) return
-        if (pendingPlaybackRequested && input.snapshot.state == DashboardPlaybackState.PAUSED) {
-            onPendingPlayback(input)
-            return
-        }
+        if (pendingPlaybackRequested) invalidate("待播放歌曲已进入播放流程")
         latest = input
         pendingPlaybackRequested = false
         if (!settings.enabled) {
@@ -111,11 +109,21 @@ internal class DashboardSyncController(
             refreshEndpoint()
             return
         }
-        pendingPlaybackRequested = false
-        submit(listOf(pending.snapshot), coalesce = false, force = true)
+        publishPendingPlayback()
     }
 
-    /** User initiated: re-check the fixed endpoint and send only an actually playing snapshot. */
+    private fun publishPendingPlayback(force: Boolean = false) {
+        val input = latest ?: return
+        if (!pendingPlaybackRequested || input.invalidated || clearRequested) return
+        val signature = EcarxMediaPayload.signature(input.snapshot)
+        // A tick must neither duplicate a successful preview nor restart its bounded retries.
+        if (!force && signature == pendingPlaybackSignature) return
+        pendingPlaybackSignature = signature
+        retry?.cancel(); retry = null; retryCount = 0
+        submit(listOf(input.snapshot), coalesce = false, force = force)
+    }
+
+    /** User initiated: re-check the fixed endpoint and resend the current eligible snapshot. */
     fun requestResend() {
         if (closed || !settings.enabled) return
         endpoint = null
@@ -124,6 +132,8 @@ internal class DashboardSyncController(
 
     fun invalidate(reason: String, allowWhenDisabled: Boolean = settings.enabled) {
         pendingPlaybackRequested = false
+        pendingPlaybackSignature = null
+        latest = latest?.copy(invalidated = true, invalidationReason = reason)
         val alreadyClearing = clearRequested && (inFlight?.clear == true || pending.any { it.clear })
         if (!alreadyClearing) {
             epoch++
@@ -189,8 +199,7 @@ internal class DashboardSyncController(
             update(DashboardStatusKind.WAITING, result.detail, result)
             val input = latest ?: return@launch
             if (!input.invalidated && pendingPlaybackRequested && input.snapshot.state == DashboardPlaybackState.PAUSED) {
-                pendingPlaybackRequested = false
-                submit(listOf(input.snapshot), coalesce = false, force = true)
+                publishPendingPlayback(force)
             } else if (!input.invalidated && input.snapshot.state == DashboardPlaybackState.PLAYING) {
                 val outgoing = policy.onPlayback(input)
                 submit(outgoing, coalesce = false, force = true)
@@ -273,7 +282,8 @@ internal class DashboardSyncController(
                     } else update(DashboardStatusKind.READY, "已发送，需在仪表媒体菜单确认")
                 }
                 is DashboardDispatch.Failed -> {
-                    if (result.retryable && pending.isEmpty() && retryCount < 3 && (next.clear || next.snapshot.state == DashboardPlaybackState.PLAYING)) {
+                    if (result.retryable && pending.isEmpty() && retryCount < 3 &&
+                        (next.clear || next.snapshot.state == DashboardPlaybackState.PLAYING || pendingPlaybackRequested)) {
                         scheduleRetry(next, result.detail)
                     } else {
                         update(DashboardStatusKind.UNAVAILABLE, result.detail, lastFailure = result.detail)

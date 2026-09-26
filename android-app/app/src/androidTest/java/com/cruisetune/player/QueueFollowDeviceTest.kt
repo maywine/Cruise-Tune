@@ -78,6 +78,8 @@ class QueueFollowDeviceTest {
                     list().findViewHolderForAdapterPosition(index)?.itemView?.isSelected==true
             }
             await("Library must contain all synthetic songs") { list().adapter?.itemCount==120 }
+            // Explicit library selection overrides the startup switch to the first nonempty queue.
+            tab("libraryTab")
             browse(30)
             command(PlaybackService.PLAY_TRACK,Bundle().apply { putString("trackId",tracks[70].id);putString("sourceId",source.id) })
             await("Selected audio must load") { c.currentMediaItem?.mediaId==tracks[70].id && c.playbackState==Player.STATE_READY }

@@ -54,6 +54,7 @@ class PlaybackService : MediaLibraryService() {
     private var applying = false
     private var persistedIntent = false
     private var screenOffObserved = false
+    private var restoredDashboardTrackId: String? = null
     private lateinit var screenOff: ScreenOffMonitor
     private lateinit var steering: SteeringController
     private lateinit var dashboard: DashboardSyncController
@@ -167,6 +168,7 @@ class PlaybackService : MediaLibraryService() {
             entries = saved.entries; revision = saved.revision; shuffled = saved.shuffled; persistedIntent = saved.playIntent
             queueSort = app.preferences.getString(TrackSort.QUEUE_PREFERENCE, null)?.let(TrackSort::fromPreference)
             if (entries.isNotEmpty()) {
+                restoredDashboardTrackId = entries[saved.index].track.id
                 applying = true
                 player.setMediaItems(entries.map { app.media.mediaItem(it.track) }, saved.index, saved.positionMs)
                 player.repeatMode = saved.repeatMode
@@ -178,7 +180,7 @@ class PlaybackService : MediaLibraryService() {
             // An OFF event may arrive while the saved queue is loading. Do not restore its old play intent.
             if (screenOffObserved || screenOff.isScreenOff()) pauseForScreenOff()
             updateExtras()
-            syncDashboard(pending = entries.isNotEmpty())
+            syncDashboard()
             while (isActive) {
                 delay(2000)
                 screenOff.checkNow()
@@ -214,12 +216,19 @@ class PlaybackService : MediaLibraryService() {
         if (restartCurrent) PlaybackOperations.retry(player)
         else { player.prepare(); player.play() }
     }
-    private fun syncDashboard(tick: Boolean = false, pending: Boolean = false) {
+    private fun syncDashboard(tick: Boolean = false) {
         if (!::dashboard.isInitialized || !ready.isCompleted) return
+        // Queue restoration stays IDLE until the user plays. Keep its publication eligible
+        // across player callbacks and ticks while the vehicle receiver is starting up.
+        if (player.currentMediaItem?.mediaId != restoredDashboardTrackId || player.playWhenReady ||
+            player.playbackState != Player.STATE_IDLE || player.playerError != null) restoredDashboardTrackId = null
+        val pending = restoredDashboardTrackId != null
+        val audio = getSystemService(android.media.AudioManager::class.java)
         val unavailable = when {
-            screenOffObserved || screenOff.isScreenOff() -> "屏幕已关闭，保持暂停"
+            screenOff.isScreenOff() || (screenOffObserved && !pending) -> "屏幕已关闭，保持暂停"
             player.playbackSuppressionReason != Player.PLAYBACK_SUPPRESSION_REASON_NONE -> "其他音频正在使用"
-            getSystemService(android.media.AudioManager::class.java).mode != android.media.AudioManager.MODE_NORMAL -> "通话或车机音频模式中"
+            audio.mode != android.media.AudioManager.MODE_NORMAL -> "通话或车机音频模式中"
+            pending && audio.isMusicActive -> "其他音频正在使用"
             player.playerError != null -> "播放正在恢复，暂不更新仪表"
             player.playbackState == Player.STATE_IDLE && !pending -> "等待歌曲准备"
             else -> null
@@ -232,7 +241,7 @@ class PlaybackService : MediaLibraryService() {
         }
         val metadata = app.playbackMetadata.value.forTrack(track.id)?.mediaMetadata
         val title = metadata?.title?.toString().orEmpty().ifBlank { track.title }
-        val artist = metadata?.artist?.toString().orEmpty()
+        val artist = metadata?.artist?.toString().orEmpty().ifBlank { track.artist }
         val album = metadata?.albumTitle?.toString().orEmpty()
         val duration = player.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: track.durationMs.takeIf { it > 0 }
         val state = when {
@@ -627,7 +636,7 @@ class PlaybackService : MediaLibraryService() {
                         updateExtras("已清除本机 Token 授权")
                     }
                     RETRY -> { cancelRecovery(); recoveryPolicy.reset(); cancelPrefetch(); prepareAndPlay(restartCurrent = true); updateExtras() }
-                    DASHBOARD_RECHECK -> dashboard.requestResend()
+                    DASHBOARD_RECHECK -> { syncDashboard(); dashboard.requestResend() }
                     else -> return@future SessionResult(SessionError.ERROR_NOT_SUPPORTED)
                 }
                 SessionResult(SessionResult.RESULT_SUCCESS)
