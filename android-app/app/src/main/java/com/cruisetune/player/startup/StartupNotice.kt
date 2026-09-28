@@ -40,7 +40,7 @@ internal object StartupNotice {
             }, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_music_note)
-            .setContentTitle("Cruise Tune 已就绪")
+            .setContentTitle("Cruise Tune 播放器")
             .setContentText("点按打开播放器")
             .setContentIntent(openPlayer)
             .setAutoCancel(true)

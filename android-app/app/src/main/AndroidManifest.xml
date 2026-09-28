@@ -38,6 +38,7 @@
         </service>
         <service android:name=".playback.OfflineDownloadService" android:exported="false" android:foregroundServiceType="dataSync" />
         <service android:name=".steering.SteeringBridgeService" android:exported="false" android:process=":steering" />
+        <service android:name=".startup.StartupRestoreJobService" android:exported="true" android:permission="android.permission.BIND_JOB_SERVICE" />
         <receiver android:name=".startup.BootReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />

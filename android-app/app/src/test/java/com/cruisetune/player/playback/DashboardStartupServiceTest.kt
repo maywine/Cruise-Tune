@@ -1,6 +1,9 @@
 package com.cruisetune.player.playback
 
 import android.content.Intent
+import android.content.ComponentName
+import android.app.job.JobParameters
+import android.app.job.JobScheduler
 import android.content.pm.ActivityInfo
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
@@ -13,6 +16,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import com.cruisetune.player.CruiseApplication
 import com.cruisetune.player.core.*
 import com.cruisetune.player.dashboard.*
+import com.cruisetune.player.startup.*
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -24,6 +28,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowStatFs
 import org.robolectric.util.ReflectionHelpers
+import org.robolectric.shadow.api.Shadow
 import java.time.Duration
 
 @RunWith(RobolectricTestRunner::class)
@@ -173,6 +178,62 @@ class DashboardStartupServiceTest {
             await("Pending song may publish after other audio is released") { app.dashboardStatus.value.sentCount == 1L }
             assertFalse(player.playWhenReady)
             assertEquals(Player.STATE_IDLE, player.playbackState)
+        } finally { owner.destroy() }
+    }
+
+    @Test fun bootJobConnectsToTheRealPlayerWithoutOpeningAnActivityOrPreparingAudio() {
+        installReceiver()
+        app.preferences.edit().putBoolean(StartupSettings.ENABLED, true).putBoolean("resumeOnOpen", true).commit()
+        val saved = app.database.restore().copy(playIntent = true)
+        app.database.savePosition(saved)
+        BootReceiver().onReceive(app, Intent(Intent.ACTION_BOOT_COMPLETED))
+        val scheduled = app.getSystemService(JobScheduler::class.java).allPendingJobs.single()
+        assertEquals(StartupRestoreJobService::class.java.name, scheduled.service.className)
+
+        // Robolectric does not instantiate bound Android services: provide the real service's Binder.
+        val playback = Robolectric.buildService(PlaybackService::class.java).create()
+        val service = playback.get()
+        val binder = service.onBind(Intent(androidx.media3.session.MediaSessionService.SERVICE_INTERFACE))
+        shadowOf(app).setComponentNameAndServiceForBindService(ComponentName(app, PlaybackService::class.java), binder)
+        val job = Robolectric.buildService(StartupRestoreJobService::class.java).create()
+        val params = Shadow.newInstanceOf(JobParameters::class.java)
+        try {
+            assertTrue(job.get().onStartJob(params))
+            await("Headless job must reach the real restore command") {
+                StartupSettings(app.preferences).diagnostic().contains("已恢复上次队列")
+            }
+            val player = ReflectionHelpers.getField<ExoPlayer>(service, "player")
+            assertEquals(2, player.mediaItemCount)
+            assertEquals(tracks[1].id, player.currentMediaItem?.mediaId)
+            assertEquals(12_345L, player.currentPosition)
+            assertEquals(Player.STATE_IDLE, player.playbackState)
+            assertFalse(player.playWhenReady)
+            assertNull(player.playerError)
+            assertNull(shadowOf(app).nextStartedActivity)
+            assertTrue(broadcasts().any { it.getStringExtra("RECEIVER_MEDIA_BOOK_NAME") == tracks[1].title })
+            assertEquals(saved.entries, app.database.restore().entries)
+        } finally {
+            job.get().onStopJob(params)
+            job.destroy(); playback.destroy()
+        }
+    }
+
+    @Test fun delayedBootResendDoesNotPublishAnOldSongAfterTheUserChangesSelection() {
+        installReceiver()
+        app.preferences.edit().putBoolean(StartupSettings.ENABLED, true).commit()
+        val owner = Robolectric.buildService(PlaybackService::class.java).create()
+        try {
+            val player = ReflectionHelpers.getField<ExoPlayer>(owner.get(), "player")
+            await("Restore pending song") { app.dashboardStatus.value.sentCount == 1L }
+            assertEquals(StartupRestoreState.RESTORED, owner.get().restoreOnBoot(false).state)
+            player.seekTo(0, 0)
+            shadowOf(Looper.getMainLooper()).idle()
+            val before = broadcasts().size
+            assertEquals(StartupRestoreState.ACTIVE, owner.get().restoreOnBoot(true).state)
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(5))
+            assertEquals(before, broadcasts().size)
+            assertEquals(tracks[0].id, player.currentMediaItem?.mediaId)
+            assertFalse(player.playWhenReady)
         } finally { owner.destroy() }
     }
 }

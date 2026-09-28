@@ -381,10 +381,17 @@ class UiReviewFixesTest {
             val activity = controller.get()
             views(activity.window.decorView).filterIsInstance<TouchButton>().first { it.text.toString() == "设置" }.performClick()
             val dialog = ShadowDialog.getLatestDialog()
-            val startup = views(dialog.window!!.decorView).filterIsInstance<CalmSwitch>().single { it.text.toString() == "开机显示播放器入口" }
+            val startup = views(dialog.window!!.decorView).filterIsInstance<CalmSwitch>().single { it.text.toString() == "开机恢复播放器" }
             assertFalse(startup.isChecked)
             startup.isChecked = true
             assertTrue(StartupSettings(app.preferences).enabled)
+            com.cruisetune.player.startup.StartupRestoreJobService.schedule(app)
+            val scheduler = app.getSystemService(android.app.job.JobScheduler::class.java)
+            assertTrue(scheduler.allPendingJobs.isNotEmpty())
+            startup.isChecked = false
+            assertFalse(StartupSettings(app.preferences).enabled)
+            assertTrue(scheduler.allPendingJobs.isEmpty())
+            assertTrue(StartupSettings(app.preferences).diagnostic().contains("开机恢复已关闭"))
         } finally {
             app.preferences.edit().remove(StartupSettings.ENABLED).commit()
             controller.pause().stop().destroy()

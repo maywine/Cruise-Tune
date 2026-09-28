@@ -15,6 +15,9 @@ import com.cruisetune.player.ui.MainActivity
 import com.cruisetune.player.steering.SteeringAction
 import com.cruisetune.player.steering.SteeringController
 import com.cruisetune.player.dashboard.*
+import com.cruisetune.player.startup.StartupSettings
+import com.cruisetune.player.startup.StartupRestoreReply
+import com.cruisetune.player.startup.StartupRestoreState
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
@@ -35,6 +38,7 @@ class PlaybackService : MediaLibraryService() {
         const val REMOVE_SOURCE = "cruise.remove_source"
         const val DISCONNECT_TOKEN = "cruise.disconnect_token"
         const val DASHBOARD_RECHECK = "cruise.dashboard_recheck"
+        const val RESTORE_ON_BOOT = "cruise.restore_on_boot"
     }
     private val app get() = application as CruiseApplication
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -586,6 +590,20 @@ class PlaybackService : MediaLibraryService() {
         }
         prefetch.update(fitting, canDownload)
     }
+    internal fun restoreOnBoot(forceDashboard: Boolean): StartupRestoreReply {
+        if (!StartupSettings(app.preferences).enabled)
+            return StartupRestoreReply(StartupRestoreState.DISABLED, detail = "开机恢复已关闭")
+        if (entries.isEmpty())
+            return StartupRestoreReply(StartupRestoreState.EMPTY, detail = "没有可恢复的播放队列")
+        syncDashboard()
+        // Do not interfere with a queue the user has already prepared, played or changed.
+        if (restoredDashboardTrackId == null)
+            return StartupRestoreReply(StartupRestoreState.ACTIVE, detail = "播放器已接管当前队列")
+        val enabled = DashboardSettings(app.preferences).enabled
+        if (enabled && forceDashboard) dashboard.requestResend()
+        return StartupRestoreReply(StartupRestoreState.RESTORED, enabled, "已恢复上次队列，保持暂停")
+    }
+
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession = session
     override fun onDestroy() {
         if (::dashboard.isInitialized) dashboard.close()
@@ -610,7 +628,7 @@ class PlaybackService : MediaLibraryService() {
         }
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
             val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
-            if (controller.packageName == packageName) listOf(PLAY_TRACK, SHUFFLE, SORT_QUEUE, RESUME_ON_OPEN, RETRY, REMOVE_SOURCE, DISCONNECT_TOKEN, DASHBOARD_RECHECK).forEach { commands.add(SessionCommand(it, Bundle.EMPTY)) }
+            if (controller.packageName == packageName) listOf(PLAY_TRACK, SHUFFLE, SORT_QUEUE, RESUME_ON_OPEN, RETRY, REMOVE_SOURCE, DISCONNECT_TOKEN, DASHBOARD_RECHECK, RESTORE_ON_BOOT).forEach { commands.add(SessionCommand(it, Bundle.EMPTY)) }
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session).setAvailableSessionCommands(commands.build())
                 .setAvailablePlayerCommands(Player.Commands.Builder().addAllCommands().remove(Player.COMMAND_CHANGE_MEDIA_ITEMS).build()).build()
         }
@@ -619,6 +637,12 @@ class PlaybackService : MediaLibraryService() {
             commandLock.withLock {
             try {
                 when (customCommand.customAction) {
+                    RESTORE_ON_BOOT -> {
+                        // A job may be cancelled while waiting for queue I/O or the command lock.
+                        if (controller.packageName != packageName || controller !in session.connectedControllers)
+                            return@future SessionResult(SessionError.ERROR_SESSION_DISCONNECTED)
+                        return@future SessionResult(SessionResult.RESULT_SUCCESS, restoreOnBoot(args.getBoolean("forceDashboard")).toBundle())
+                    }
                     PLAY_TRACK -> playTrack(args.getString("trackId") ?: "", args.getString("sourceId"))
                     SHUFFLE -> toggleShuffle()
                     SORT_QUEUE -> sortQueue(TrackSort.fromPreference(args.getString("sort")))

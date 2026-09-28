@@ -4,13 +4,14 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 
-/** Leaves a user-initiated way into the restored player after boot. */
+/** Restores the paused player in a system job and offers a tap-to-open notification. */
 @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED && intent.action != QUICKBOOT_POWERON) return
         val preferences = context.getSharedPreferences("preferences", Context.MODE_PRIVATE)
         if (!StartupSettings(preferences).enabled) return
+        StartupRestoreJobService.schedule(context)
         StartupNotice.show(context)
     }
 
