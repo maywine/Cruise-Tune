@@ -1115,9 +1115,33 @@ class MainActivity : CruiseActivity() {
         }
         content.addView(status, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12); bottomMargin = dp(8) })
         val recheck = action(content, "重新检查并发送") { command(PlaybackService.DASHBOARD_RECHECK) }
-        action(content, "复制诊断信息") {
+        fun diagnosticReport(): String {
             val version = packageManager.getPackageInfo(packageName, 0).versionName.orEmpty()
-            val report = app.dashboardStatus.value.diagnosticReport(version, Build.VERSION.SDK_INT) + "\n" + StartupSettings(app.preferences).diagnostic()
+            return app.dashboardStatus.value.diagnosticReport(version, Build.VERSION.SDK_INT) + "\n" + StartupSettings(app.preferences).diagnostic()
+        }
+        val diagnostic = Design.label(this, "", 20f, Design.text).apply {
+            setLineSpacing(dp(5).toFloat(), 1f)
+            setTextIsSelectable(true)
+        }
+        val details = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            paragraph(this, "可直接拍照发送。重新展开可更新诊断信息。")
+            addView(diagnostic, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12); bottomMargin = dp(8) })
+        }
+        lateinit var viewDiagnostic: TouchButton
+        viewDiagnostic = action(content, "查看诊断信息") {
+            val expanded = details.visibility != View.VISIBLE
+            // Keep the displayed report stable while it is being photographed or selected.
+            if (expanded) diagnostic.text = diagnosticReport()
+            details.visibility = if (expanded) View.VISIBLE else View.GONE
+            viewDiagnostic.text = if (expanded) "收起诊断信息" else "查看诊断信息"
+            ViewCompat.setStateDescription(viewDiagnostic, if (expanded) "已展开" else "已收起")
+        }
+        ViewCompat.setStateDescription(viewDiagnostic, "已收起")
+        content.addView(details, LinearLayout.LayoutParams(-1, -2))
+        action(content, "复制诊断信息") {
+            val report = if (details.visibility == View.VISIBLE) diagnostic.text.toString() else diagnosticReport()
             getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(
                 android.content.ClipData.newPlainText("Cruise Tune 仪表媒体诊断", report)
             )
