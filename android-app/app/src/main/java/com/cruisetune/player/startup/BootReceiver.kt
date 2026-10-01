@@ -8,9 +8,12 @@ import android.content.Intent
 @androidx.annotation.OptIn(markerClass = [androidx.media3.common.util.UnstableApi::class])
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != Intent.ACTION_BOOT_COMPLETED && intent.action != QUICKBOOT_POWERON) return
+        val action = intent.action ?: return
+        if (action != Intent.ACTION_BOOT_COMPLETED && action != QUICKBOOT_POWERON) return
         val preferences = context.getSharedPreferences("preferences", Context.MODE_PRIVATE)
-        if (!StartupSettings(preferences).enabled) return
+        val settings = StartupSettings(preferences)
+        settings.recordBootEvent(action)
+        if (!settings.enabled) return
         StartupRestoreJobService.schedule(context)
         StartupNotice.show(context)
     }

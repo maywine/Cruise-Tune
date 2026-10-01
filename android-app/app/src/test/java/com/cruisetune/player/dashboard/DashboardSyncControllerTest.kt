@@ -23,11 +23,12 @@ class DashboardSyncControllerTest {
     private class FakeTransport : DashboardTransport {
         val sent = mutableListOf<Intent>()
         var failuresRemaining = 0
+        var retryable = true
         var attempts = 0
         override fun inspect() = DashboardEndpoint(DashboardEndpointKind.READY, "测试接收器已准备", "1.0", 1000, true)
         override fun dispatch(intent: Intent): DashboardDispatch {
             attempts++
-            if (failuresRemaining > 0) { failuresRemaining--; return DashboardDispatch.Failed("Temporary failure", true) }
+            if (failuresRemaining > 0) { failuresRemaining--; return DashboardDispatch.Failed("Synthetic failure", retryable) }
             sent += Intent(intent); return DashboardDispatch.Dispatched
         }
     }
@@ -135,6 +136,38 @@ class DashboardSyncControllerTest {
         assertEquals(5, transport.attempts)
         assertEquals(2, transport.sent.single().getIntExtra("RECEIVER_MEDIA_PLAY_STATUS", -1))
         controller.close()
+    }
+
+    @Test fun automaticBootResendsDoNotRetryRejectedSnapshotsButManualRecheckCan() = runTest {
+        val context = RuntimeEnvironment.getApplication() as Application
+        val preferences = context.getSharedPreferences("dashboard-pending-rejected", Context.MODE_PRIVATE).apply {
+            edit().clear().putBoolean(DashboardSettings.ENABLED, true).commit()
+        }
+        val transport = FakeTransport().apply { failuresRemaining = 10; retryable = false }
+        val controller = DashboardSyncController(this, DashboardSettings(preferences), preferences, transport,
+            MutableStateFlow(DashboardStatus()), elapsedMs = { testScheduler.currentTime }, ioDispatcher = StandardTestDispatcher(testScheduler))
+        try {
+            val pending = DashboardInput(snapshot(DashboardPlaybackState.PAUSED))
+            controller.onPendingPlayback(pending)
+            advanceUntilIdle()
+            assertEquals(1, transport.attempts)
+            for (waitMs in listOf(5_000L, 10_000L, 15_000L)) {
+                advanceTimeBy(waitMs)
+                controller.onPendingPlayback(pending)
+                controller.requestResend(automatic = true)
+                advanceUntilIdle()
+            }
+            assertEquals("A permanent failure must survive automatic boot resends", 1, transport.attempts)
+            controller.invalidate("熄屏")
+            controller.onPendingPlayback(pending)
+            advanceUntilIdle()
+            assertEquals(1, transport.attempts)
+            transport.failuresRemaining = 0
+            controller.requestResend()
+            advanceUntilIdle()
+            assertEquals(2, transport.attempts)
+            assertEquals(1, transport.sent.size)
+        } finally { controller.close() }
     }
 
     @Test fun pendingRetryDoesNotResurrectAfterPlaybackSelectionOrDisablingSync() = runTest {

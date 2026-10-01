@@ -35,7 +35,7 @@ FLAC 默认通过官方 Media3 扩展和 libFLAC 1.5.0 解码成 PCM，再交给
 
 打开应用先恢复信息与位置，默认等待用户继续。熄屏时清除播放意图，即使开启自动续播，下一次亮屏也不会自行恢复。进程结束与物理断电不同，不能把模拟器采样差当作最大断电误差保证。依据：[Android 生命周期](https://developer.android.com/guide/components/activities/activity-lifecycle)、[SQLite synchronous](https://www.sqlite.org/pragma.html#pragma_synchronous)、[Media3 后台播放](https://developer.android.com/media/media3/session/background-playback)。
 
-开启“开机恢复播放器”后，`BootReceiver` 将恢复工作交给 `JobScheduler`，同时提供点击打开的通知。后台任务通过 `MediaController` 绑定现有 `PlaybackService`，等待其恢复本地队列；不调用自动续播、prepare 或 play，也不以启动播放前台服务来维持空闲状态。任务执行由系统调度，通知权限不影响恢复任务。连接超时或系统中止最多尝试三次；关闭开关取消任务。任务结束释放自身连接，用户界面或实际播放接管后的服务生命周期由 Media3 管理。依据：[后台执行限制与绑定服务](https://developer.android.com/about/versions/oreo/background)、[JobService 生命周期](https://developer.android.com/reference/android/app/job/JobService)。
+开启“开机恢复播放器”后，`BootReceiver` 将恢复工作交给 `JobScheduler`，同时提供点击打开的通知。后台任务先通过 `MediaController` 连接现有 `PlaybackService`，再请求恢复本地队列；连接与恢复调用各有独立的 10 秒超时，诊断区分两者，避免连接耗时挤占队列恢复期限。不调用自动续播、prepare 或 play，也不以启动播放前台服务来维持空闲状态。任务执行由系统调度，通知权限不影响恢复任务。超时或系统中止最多尝试三次，任务入口也检查次数上限；关闭开关取消任务。任务结束释放自身连接，用户界面或实际播放接管后的服务生命周期由 Media3 管理。依据：[后台执行限制与绑定服务](https://developer.android.com/about/versions/oreo/background)、[JobService 生命周期](https://developer.android.com/reference/android/app/job/JobService)。
 
 ## 数据保留与清理
 

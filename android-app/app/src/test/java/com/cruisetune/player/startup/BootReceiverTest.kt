@@ -9,8 +9,10 @@ import android.content.Intent
 import android.os.Build
 import com.cruisetune.player.ui.MainActivity
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -38,6 +40,10 @@ class BootReceiverTest {
         assertNull(shadowOf(app).nextStartedActivity)
         assertEquals(0, shadowOf(notifications).allNotifications.size)
         assertEquals(0, scheduler.allPendingJobs.size)
+        val report = StartupSettings(app.getSharedPreferences("preferences", Context.MODE_PRIVATE)).diagnostic()
+        assertTrue(report.contains("广播类型：BOOT_COMPLETED"))
+        assertTrue(report.contains("收到广播时开关：已关闭"))
+        assertTrue(report.contains("尚未记录后台恢复任务安排"))
     }
 
     @Test fun enabledStartupShowsTapToOpenNotificationAfterBoot() {
@@ -61,8 +67,15 @@ class BootReceiverTest {
         preferences.edit().putBoolean(StartupSettings.ENABLED, true).commit()
         BootReceiver().onReceive(app, Intent(BootReceiver.QUICKBOOT_POWERON))
         assertEquals(1, shadowOf(notifications).allNotifications.size)
+        val settings = StartupSettings(preferences)
+        assertTrue(settings.diagnostic().contains("广播类型：QUICKBOOT_POWERON"))
+        repeat(3) { settings.beginAttempt() }
+        assertFalse(settings.canRetry)
         BootReceiver().onReceive(app, Intent(Intent.ACTION_BOOT_COMPLETED))
         assertEquals(1, scheduler.allPendingJobs.size)
+        assertFalse(settings.canRetry)
+        assertTrue(settings.diagnostic().contains("广播类型：BOOT_COMPLETED"))
+        assertTrue(settings.diagnostic().contains("收到广播时开关：已开启"))
     }
 
     @Test fun unrelatedBroadcastDoesNotOpenActivity() {
@@ -72,6 +85,7 @@ class BootReceiverTest {
         assertNull(shadowOf(app).nextStartedActivity)
         assertEquals(0, shadowOf(notifications).allNotifications.size)
         assertEquals(0, scheduler.allPendingJobs.size)
+        assertTrue(StartupSettings(preferences).diagnostic().contains("尚未记录开机广播入口"))
     }
 
     @Test @Config(sdk = [33]) fun deniedNotificationPermissionDoesNotBlockBackgroundRestore() {

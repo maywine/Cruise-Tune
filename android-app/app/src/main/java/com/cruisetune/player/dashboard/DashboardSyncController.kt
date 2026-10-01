@@ -40,6 +40,7 @@ internal class DashboardSyncController(
     private var latest: DashboardInput? = null
     private var pendingPlaybackRequested = false
     private var pendingPlaybackSignature: String? = null
+    private var rejectedPendingSignature: String? = null
     private var lastSentSnapshot: DashboardSnapshot? = null
     private var clearRequested = false
     private var lastSignature: String? = null
@@ -116,6 +117,7 @@ internal class DashboardSyncController(
         val input = latest ?: return
         if (!pendingPlaybackRequested || input.invalidated || clearRequested) return
         val signature = EcarxMediaPayload.signature(input.snapshot)
+        if (signature == rejectedPendingSignature) return
         // A tick must neither duplicate a successful preview nor restart its bounded retries.
         if (!force && signature == pendingPlaybackSignature) return
         pendingPlaybackSignature = signature
@@ -123,9 +125,11 @@ internal class DashboardSyncController(
         submit(listOf(input.snapshot), coalesce = false, force = force)
     }
 
-    /** User initiated: re-check the fixed endpoint and resend the current eligible snapshot. */
-    fun requestResend() {
+    /** Automatic startup resends must not override a terminal dispatch failure. */
+    fun requestResend(automatic: Boolean = false) {
         if (closed || !settings.enabled) return
+        if (automatic && (!pendingPlaybackRequested || latest?.snapshot?.let(EcarxMediaPayload::signature) == rejectedPendingSignature)) return
+        if (!automatic) rejectedPendingSignature = null
         endpoint = null
         refreshEndpoint(force = true)
     }
@@ -282,6 +286,7 @@ internal class DashboardSyncController(
                     } else update(DashboardStatusKind.READY, "已发送，需在仪表媒体菜单确认")
                 }
                 is DashboardDispatch.Failed -> {
+                    if (!result.retryable) rejectedPendingSignature = EcarxMediaPayload.signature(next.snapshot)
                     if (result.retryable && pending.isEmpty() && retryCount < 3 &&
                         (next.clear || next.snapshot.state == DashboardPlaybackState.PLAYING || pendingPlaybackRequested)) {
                         scheduleRetry(next, result.detail)

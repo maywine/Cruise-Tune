@@ -8,7 +8,11 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
+import com.cruisetune.player.CruiseApplication
+import com.cruisetune.player.dashboard.DashboardStatus
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 
 /** JobScheduler owns the background lifetime; idle restoration needs no media foreground service. */
 @androidx.media3.common.util.UnstableApi
@@ -28,9 +32,12 @@ class StartupRestoreJobService : JobService() {
                     .setOverrideDeadline(5_000L)
                     .setBackoffCriteria(10_000L, JobInfo.BACKOFF_POLICY_EXPONENTIAL)
                     .build()
-                if (scheduler.schedule(job) != JobScheduler.RESULT_SUCCESS)
+                if (scheduler.schedule(job) != JobScheduler.RESULT_SUCCESS) {
+                    settings.recordStage(StartupStage.STOPPED)
                     settings.record("系统未接受后台恢复任务，请点通知打开播放器")
+                }
             } catch (error: RuntimeException) {
+                settings.recordStage(StartupStage.STOPPED)
                 settings.record("后台恢复任务未能安排，请点通知打开播放器")
                 Log.w(TAG, "Unable to schedule background restoration", error)
             }
@@ -39,7 +46,10 @@ class StartupRestoreJobService : JobService() {
         internal fun cancel(context: Context) {
             context.getSystemService(JobScheduler::class.java).cancel(JOB_ID)
             StartupNotice.dismiss(context)
-            StartupSettings(context.getSharedPreferences("preferences", Context.MODE_PRIVATE)).record("开机恢复已关闭")
+            StartupSettings(context.getSharedPreferences("preferences", Context.MODE_PRIVATE)).apply {
+                recordStage(StartupStage.STOPPED)
+                record("开机恢复已关闭")
+            }
         }
     }
 
@@ -49,8 +59,12 @@ class StartupRestoreJobService : JobService() {
     private var parameters: JobParameters? = null
     private var work: Job? = null
     internal var connect: (Context) -> StartupPlaybackConnection = ::StartupMediaConnection
+    internal var dashboardUpdates: () -> Flow<DashboardStatus> = {
+        (application as? CruiseApplication)?.dashboardStatus ?: emptyFlow()
+    }
     private val changed = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == StartupSettings.ENABLED && !settings.enabled) {
+            settings.recordStage(StartupStage.STOPPED)
             settings.record("开机恢复已关闭")
             work?.cancel()
         }
@@ -62,25 +76,31 @@ class StartupRestoreJobService : JobService() {
     }
 
     override fun onStartJob(params: JobParameters): Boolean {
-        if (!settings.enabled || parameters != null) return false
+        if (!settings.canRetry || parameters != null) return false
         parameters = params
         settings.beginAttempt()
         work = scope.launch(start = CoroutineStart.LAZY) {
             var retry = false
+            val observation = launch { dashboardUpdates().collect { settings.recordDashboard(it) } }
             try {
-                StartupRestoration(connect(this@StartupRestoreJobService), { settings.enabled }) { reply ->
-                    settings.record(reply.detail)
-                }.run()
+                StartupRestoration(connect(this@StartupRestoreJobService), { settings.enabled },
+                    report = { reply -> settings.record(reply.detail) }, stage = settings::recordStage).run()
+                settings.recordStage(StartupStage.FINISHED)
             } catch (error: TimeoutCancellationException) {
                 retry = settings.canRetry
-                settings.record(if (retry) "后台播放器连接超时，等待重试" else "后台播放器连接超时，请手动打开应用")
+                val phase = settings.stage?.description ?: "后台恢复"
+                settings.recordStage(if (retry) StartupStage.RETRY_WAIT else StartupStage.STOPPED)
+                settings.record("${phase}超时，${if (retry) "等待重试" else "请手动打开应用"}")
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
                 retry = settings.canRetry
-                settings.record(if (retry) "后台恢复未完成，等待重试" else "后台恢复未完成，请手动打开应用")
+                val phase = settings.stage?.description ?: "后台恢复"
+                settings.recordStage(if (retry) StartupStage.RETRY_WAIT else StartupStage.STOPPED)
+                settings.record("${phase}未完成，${if (retry) "等待重试" else "请手动打开应用"}")
                 Log.w(TAG, "Background restoration failed", error)
             } finally {
+                observation.cancel()
                 if (parameters === params) {
                     parameters = null
                     work = null
@@ -97,6 +117,7 @@ class StartupRestoreJobService : JobService() {
         parameters = null
         work?.cancel(); work = null
         val retry = settings.canRetry
+        settings.recordStage(if (retry) StartupStage.RETRY_WAIT else StartupStage.STOPPED)
         settings.record(if (retry) "后台恢复被系统中断，等待重试" else "后台恢复已停止")
         return retry
     }

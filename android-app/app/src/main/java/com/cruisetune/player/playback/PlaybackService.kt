@@ -600,7 +600,7 @@ class PlaybackService : MediaLibraryService() {
         if (restoredDashboardTrackId == null)
             return StartupRestoreReply(StartupRestoreState.ACTIVE, detail = "播放器已接管当前队列")
         val enabled = DashboardSettings(app.preferences).enabled
-        if (enabled && forceDashboard) dashboard.requestResend()
+        if (enabled && forceDashboard) dashboard.requestResend(automatic = true)
         return StartupRestoreReply(StartupRestoreState.RESTORED, enabled, "已恢复上次队列，保持暂停")
     }
 

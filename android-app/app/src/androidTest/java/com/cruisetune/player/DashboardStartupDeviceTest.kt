@@ -102,7 +102,9 @@ class DashboardStartupDeviceTest {
             localUri = file.toURI().toString(), mimeType = "audio/flac", size = file.length(), durationMs = 60_000) }
         val keys = listOf(StartupSettings.ENABLED, DashboardSettings.ENABLED, "resumeOnOpen", "prefetchNextTracks")
         val previous = keys.associateWith { key -> if (app.preferences.contains(key)) app.preferences.getBoolean(key, false) else null }
-        val diagnosticKeys = listOf("startup.receivedAt", "startup.result", "startup.attempts")
+        val diagnosticKeys = listOf("startup.receivedAt", "startup.result", "startup.attempts",
+            "startup.bootEventAt", "startup.bootAction", "startup.enabledAtBoot", "startup.attemptAt",
+            "startup.stage", "startup.stageAt", "startup.dashboardRecord", "startup.dashboardAt")
         val previousDiagnostics = diagnosticKeys.associateWith { app.preferences.all[it] }
         val transport = TestTransport(app)
         val received = CopyOnWriteArrayList<Intent>()
@@ -172,6 +174,10 @@ class DashboardStartupDeviceTest {
             assertEquals(12_345L, first.getLongExtra("RECEIVER_MEDIA_CURRENT_POSITION", -1))
             assertEquals(EcarxBroadcastTransport.component, transport.dispatched.single().component)
             assertEquals("Song must be published before opening MainActivity", 0, monitor.hits)
+            await("Boot diagnostics must persist the actual asynchronous dispatch") {
+                StartupSettings(app.preferences).diagnostic().contains("记录时本进程已发送 1 次（无接收回执）")
+            }
+            assertTrue(StartupSettings(app.preferences).diagnostic().contains("仪表启动同步窗口"))
             // The real boot connection has done its work; subsequent checks exercise controller policy.
             app.getSystemService(JobScheduler::class.java).cancel(StartupRestoreJobService.JOB_ID)
             main {
@@ -184,6 +190,7 @@ class DashboardStartupDeviceTest {
             assertNotNull("Notification must still open the restored player", activity)
             SystemClock.sleep(4_200)
             assertEquals(1, received.size); assertPending()
+            val bootRecord = app.preferences.getString("startup.dashboardRecord", null)
             command(PlaybackService.DASHBOARD_RECHECK)
             await("Manual resend must work while paused") { received.size == 2 }
 
@@ -239,6 +246,7 @@ class DashboardStartupDeviceTest {
             await("Pause must publish paused state") { !engine.playWhenReady && received.last().getIntExtra("RECEIVER_MEDIA_PLAY_STATUS", -1) == 2 }
             command(PlaybackService.REMOVE_SOURCE, Bundle().apply { putString("sourceId", source.id) })
             await("Fixture queue must be removed") { engine.mediaItemCount == 0 }
+            assertEquals("Later playback must not overwrite boot evidence", bootRecord, app.preferences.getString("startup.dashboardRecord", null))
         } finally {
             app.getSystemService(JobScheduler::class.java).cancel(StartupRestoreJobService.JOB_ID)
             main { controller?.pause(); dashboard?.close(); scope.cancel(); controller?.release(); activity?.finish() }
@@ -247,7 +255,7 @@ class DashboardStartupDeviceTest {
             app.preferences.edit().apply { previous.forEach { (key, value) -> if (value == null) remove(key) else putBoolean(key, value) } }.commit()
             app.preferences.edit().apply {
                 previousDiagnostics.forEach { (key, value) ->
-                    when (value) { is Long -> putLong(key, value); is Int -> putInt(key, value); is String -> putString(key, value); else -> remove(key) }
+                    when (value) { is Long -> putLong(key, value); is Int -> putInt(key, value); is String -> putString(key, value); is Boolean -> putBoolean(key, value); else -> remove(key) }
                 }
             }.commit()
             app.unregisterReceiver(receiver)
