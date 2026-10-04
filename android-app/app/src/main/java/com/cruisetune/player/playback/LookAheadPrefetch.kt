@@ -1,7 +1,21 @@
 package com.cruisetune.player.playback
 
+import androidx.media3.common.Format
+import androidx.media3.common.MimeTypes
+import androidx.media3.common.util.Util
+import androidx.media3.exoplayer.DefaultLoadControl
 import com.cruisetune.player.core.Track
 import kotlinx.coroutines.*
+
+@androidx.media3.common.util.UnstableApi
+internal fun prefetchBufferReady(bufferedDurationMs: Long, format: Format?): Boolean {
+    val requiredMs = if (format != null && format.sampleMimeType == MimeTypes.AUDIO_RAW &&
+        format.sampleRate > 0 && format.channelCount > 0 && Util.isEncodingLinearPcm(format.pcmEncoding)) {
+        val bytesPerSecond = Util.getPcmFrameSize(format.pcmEncoding, format.channelCount).toLong() * format.sampleRate
+        minOf(15_000L, DefaultLoadControl.DEFAULT_AUDIO_BUFFER_SIZE.toLong() * 750 / bytesPerSecond).coerceAtLeast(1)
+    } else 15_000L
+    return bufferedDurationMs >= requiredMs
+}
 
 /** One cancellable attempt. The engine joins it before starting a replacement queue. */
 interface PrefetchAttempt {

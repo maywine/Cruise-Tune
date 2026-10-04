@@ -579,7 +579,8 @@ class PlaybackService : MediaLibraryService() {
         val newCapacityMessage = if (enabled && wanted.isNotEmpty() && (fitting.size < wanted.size || !app.media.hasRoom)) "缓存空间不足，暂时无法存下后 3 首" else null
         if (newCapacityMessage != capacityMessage) { capacityMessage = newCapacityMessage; updateExtras() }
         val canDownload = enabled && !screenOff.isScreenOff() && player.playWhenReady && player.playerError == null &&
-            player.totalBufferedDuration >= 15000 && app.media.hasRoom
+            app.media.hasRoom && (current?.let { !app.media.isBypassed(it.cacheKey) && app.media.isPrefetchComplete(it) } == true ||
+                prefetchBufferReady(player.totalBufferedDuration, player.audioFormat))
         if (packageName.endsWith(".authcheck")) {
             prefetchGate = "目标 ${fitting.size}/${wanted.size} · 开关 $enabled · 播放 ${player.playWhenReady} · 缓冲 ${player.totalBufferedDuration} ms · 空间 ${app.media.hasRoom} · 下载 $canDownload"
             updateExtras()

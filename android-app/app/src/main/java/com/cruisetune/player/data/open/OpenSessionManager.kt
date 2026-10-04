@@ -9,13 +9,19 @@ import java.util.concurrent.ConcurrentHashMap
 
 class OpenSessionManager(private val store: OpenSessionStore, private val broker: OpenBroker, private val now: () -> Long = System::currentTimeMillis) {
     private val locks = ConcurrentHashMap<String, Mutex>()
+    private val generations = ConcurrentHashMap<String, Long>()
     private fun lock(id: String) = locks.getOrPut(id) { Mutex() }
+    private fun remember(session: OpenSession): OpenSession {
+        generations[session.accountId] = maxOf(generations[session.accountId] ?: -1, session.generation)
+        return session
+    }
     suspend fun activate(session: OpenSession): OpenSession = withContext(Dispatchers.IO) {
         lock(session.accountId).withLock {
             validate(session)
-            val next = session.copy(generation = (store.read(session.accountId)?.generation ?: -1) + 1)
+            store.read(session.accountId)?.let(::remember)
+            val next = session.copy(generation = (generations[session.accountId] ?: -1) + 1)
             store.write(next)
-            next
+            remember(next)
         }
     }
     suspend fun fresh(accountId: String): OpenSession = withContext(Dispatchers.IO) {
@@ -30,18 +36,23 @@ class OpenSessionManager(private val store: OpenSessionStore, private val broker
             if (current.generation != failedGeneration) current else rotate(current)
         }
     }
-    suspend fun disconnect(accountId: String) = withContext(Dispatchers.IO) { lock(accountId).withLock { store.remove(accountId) } }
+    suspend fun disconnect(accountId: String) = withContext(Dispatchers.IO) {
+        lock(accountId).withLock {
+            store.read(accountId)?.let(::remember)
+            store.remove(accountId)
+        }
+    }
     suspend fun acceptServerToken(accountId: String, expectedGeneration: Long, token: String): OpenSession = withContext(Dispatchers.IO) {
         lock(accountId).withLock {
             val current = load(accountId)
             if (current.generation != expectedGeneration || current.accessToken == token) current
             else {
                 val next = current.copy(accessToken = token, expiresAtMs = 0, generation = current.generation + 1)
-                validate(next); store.write(next); next
+                validate(next); store.write(next); remember(next)
             }
         }
     }
-    private fun load(id: String): OpenSession = store.read(id) ?: throw UserError("开放平台账号需重新授权", true)
+    private fun load(id: String): OpenSession = store.read(id)?.let(::remember) ?: throw UserError("开放平台账号需重新授权", true)
     private suspend fun rotate(current: OpenSession): OpenSession {
         val returned = broker.rotate(current)
         if (returned.accountId != current.accountId || returned.userId != current.userId || returned.clientId != current.clientId || returned.profileId != current.profileId || returned.deviceId != current.deviceId) throw UserError("授权服务返回了不匹配的账号，请重新授权", true)
@@ -50,7 +61,7 @@ class OpenSessionManager(private val store: OpenSessionStore, private val broker
         if (next.expiresAtMs > 0 && next.expiresAtMs <= now()) throw UserError("授权服务未返回有效的新令牌", true)
         // Store the access/refresh pair atomically before any caller can consume it.
         store.write(next)
-        return next
+        return remember(next)
     }
     private fun validate(s: OpenSession) {
         if (s.userId.isBlank() || s.accountId != OpenSession.id(s.clientId, s.userId) || s.deviceId.isBlank() || s.accessToken.isBlank() || s.refreshToken.isBlank()) throw UserError("开放平台授权信息不完整", true)

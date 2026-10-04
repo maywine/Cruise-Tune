@@ -3,6 +3,7 @@ package com.cruisetune.player.playback
 import androidx.media3.common.C
 import androidx.media3.datasource.*
 import androidx.media3.datasource.cache.*
+import androidx.media3.exoplayer.offline.DownloadService
 import com.cruisetune.player.CruiseApplication
 import com.cruisetune.player.core.*
 import kotlinx.coroutines.runBlocking
@@ -30,7 +31,7 @@ class CacheBoundaryBudgetTest {
         app.database.replaceScan("source",listOf(it))
     }
     private fun seed(cache:Cache,t:Track,length:Long=t.size){
-        val writer=CacheDataSource.Factory().setCache(cache).setUpstreamDataSourceFactory{ByteArrayDataSource(ByteArray(t.size.toInt()){7})}.createDataSource()
+        val writer=CacheDataSource.Factory().setCache(cache).setUpstreamDataSourceFactory{ByteArrayDataSource(ByteArray(maxOf(t.size,length).toInt()){7})}.createDataSource()
         CacheWriter(writer,DataSpec.Builder().setUri("cruisetune://track/${t.id}").setKey(t.cacheKey).setLength(length).build(),null,null).cache()
     }
     private fun forbiddenUpstream() = DataSource.Factory {
@@ -110,5 +111,65 @@ class CacheBoundaryBudgetTest {
         assertArrayEquals(ByteArray(8192){7},read(media,t))
         assertEquals(4096L,media.stream.getCachedBytes(t.cacheKey,0,t.size))
         assertFalse(media.hasCompleteStreamingCache(t))
+    }
+    @Test fun offlineResumeOnlyRequiresSpaceForUncachedBytes() {
+        val selected = track(100 * 1024L)
+        val media = app.media
+        seed(media.offline, selected, 90 * 1024L)
+        space(262149)
+        media.keepOffline(selected)
+        assertEquals(DownloadService.ACTION_ADD_DOWNLOAD, shadowOf(app).nextStartedService.action)
+        assertEquals(90 * 1024L, media.offline.getCachedBytes(selected.cacheKey, 0, selected.size))
+    }
+    @Test fun alreadyCompleteOfflineBytesCanBeRetainedWithoutAllocatingAnotherFile() {
+        val selected = track()
+        val media = app.media
+        seed(media.offline, selected)
+        space(262143)
+        media.keepOffline(selected)
+        assertEquals(DownloadService.ACTION_ADD_DOWNLOAD, shadowOf(app).nextStartedService.action)
+        assertTrue(media.isComplete(selected))
+    }
+    @Test fun insufficientRemainingSpaceDoesNotDiscardPartialOfflineData() {
+        val selected = track(100 * 1024L)
+        val media = app.media
+        seed(media.offline, selected, 90 * 1024L)
+        space(262145)
+        assertTrue(runCatching { media.keepOffline(selected) }.exceptionOrNull() is UserError)
+        assertNull(shadowOf(app).nextStartedService)
+        assertEquals(90 * 1024L, media.offline.getCachedBytes(selected.cacheKey, 0, selected.size))
+    }
+    @Test fun streamOrOlderVersionBytesDoNotReduceOfflineDownloadSpaceRequirements() {
+        val selected = track(100 * 1024L)
+        val media = app.media
+        seed(media.stream, selected)
+        seed(media.offline, selected.copy(version = "older"), 90 * 1024L)
+        space(262149)
+        assertTrue(runCatching { media.keepOffline(selected) }.exceptionOrNull() is UserError)
+        assertNull(shadowOf(app).nextStartedService)
+    }
+    @Test fun unknownLengthStillRequiresRoomAboveTheReserve() {
+        val selected = track(0)
+        val media = app.media
+        space(262144)
+        assertTrue(runCatching { media.keepOffline(selected) }.exceptionOrNull() is UserError)
+        assertNull(shadowOf(app).nextStartedService)
+        space(262149)
+        media.keepOffline(selected)
+        assertEquals(DownloadService.ACTION_ADD_DOWNLOAD, shadowOf(app).nextStartedService.action)
+    }
+    @Test fun offlineLengthMetadataStillBoundsDownloadsWithUnknownCatalogSize() {
+        val selected = track(0)
+        val media = app.media
+        seed(media.offline, selected, 90 * 1024L)
+        val metadata = ContentMetadataMutations()
+        ContentMetadataMutations.setContentLength(metadata, 100 * 1024L)
+        media.offline.applyContentMetadataMutations(selected.cacheKey, metadata)
+        space(262145)
+        assertTrue(runCatching { media.keepOffline(selected) }.exceptionOrNull() is UserError)
+        assertNull(shadowOf(app).nextStartedService)
+        space(262149)
+        media.keepOffline(selected)
+        assertEquals(DownloadService.ACTION_ADD_DOWNLOAD, shadowOf(app).nextStartedService.action)
     }
 }

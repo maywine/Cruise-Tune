@@ -11,6 +11,8 @@ import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class OpenLayerTest {
     private fun session() = OpenSession(OpenSession.id("player-client", "user-1"), "profile", "player-client", "user-1", "device", "access-1", "refresh-1", Long.MAX_VALUE)
@@ -64,6 +66,72 @@ class OpenLayerTest {
         manager.disconnect(s.accountId)
         assertTrue(runCatching { manager.acceptServerToken(s.accountId, 1, "late") }.isFailure)
         assertNull(store.value)
+    }
+    @Test fun disconnectAndReauthorizeCannotReuseAnOutstandingRequestGeneration() = runBlocking {
+        val original = session()
+        val store = Store(original)
+        val broker = Broker()
+        val manager = OpenSessionManager(store, broker)
+        val outstanding = manager.fresh(original.accountId)
+        manager.disconnect(original.accountId)
+        val renewed = manager.activate(original.copy(accessToken = "reauthorized", refreshToken = "new-pair"))
+        manager.acceptServerToken(original.accountId, outstanding.generation, "late-old-token")
+        manager.refreshAfterFailure(original.accountId, outstanding.generation)
+        assertEquals("reauthorized", store.value!!.accessToken)
+        assertEquals("new-pair", store.value!!.refreshToken)
+        assertEquals(0, broker.rotations.get())
+        assertTrue(renewed.generation > outstanding.generation)
+    }
+    @Test fun repeatedDisconnectsKeepTheHighestRotatedGeneration() = runBlocking {
+        val original = session().copy(generation = 8)
+        val store = Store(original)
+        val manager = OpenSessionManager(store, Broker())
+        var current = manager.fresh(original.accountId)
+        repeat(3) { cycle ->
+            current = manager.acceptServerToken(original.accountId, current.generation, "server-token-$cycle")
+            val previous = current.generation
+            manager.disconnect(original.accountId)
+            manager.disconnect(original.accountId)
+            current = manager.activate(original.copy(accessToken = "login-$cycle", refreshToken = "refresh-$cycle"))
+            assertTrue(current.generation > previous)
+            manager.acceptServerToken(original.accountId, previous, "stale")
+            assertEquals("login-$cycle", store.value!!.accessToken)
+        }
+    }
+    @Test fun delayedHttpTokenHeaderCannotReplaceAReauthorizedSession() = runBlocking {
+        val original = session()
+        val store = Store(original)
+        val broker = Broker()
+        val manager = OpenSessionManager(store, broker)
+        val requested = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val server = MockWebServer()
+        server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
+            override fun dispatch(request: okhttp3.mockwebserver.RecordedRequest): MockResponse {
+                requested.countDown()
+                check(release.await(5, TimeUnit.SECONDS))
+                return MockResponse().setHeader("x-new-access-token", "late-old-token")
+                    .setBody("""{"status":0,"data":{"fid":"song","download_url":"https://pdds.quark.cn/song"}}""")
+            }
+        }
+        server.start()
+        val pending = async(Dispatchers.IO) {
+            QuarkOpenApi(original.accountId, manager, broker, OkHttpClient(), server.url("/")).resolve("song")
+        }
+        try {
+            assertTrue(requested.await(5, TimeUnit.SECONDS))
+            manager.disconnect(original.accountId)
+            val renewed = manager.activate(original.copy(accessToken = "reauthorized", refreshToken = "new-pair"))
+            release.countDown()
+            val result = withTimeout(5_000) { pending.await() }
+            assertEquals(renewed, store.value)
+            assertEquals(renewed.generation, result.credentialGeneration)
+            assertTrue(result.headers.getValue("Cookie").contains("x_pan_access_token=reauthorized"))
+            assertEquals("access-1", server.takeRequest().requestUrl!!.queryParameter("access_token"))
+            assertEquals(0, broker.rotations.get())
+        } finally {
+            release.countDown(); pending.cancelAndJoin(); server.shutdown()
+        }
     }
     private fun file(fid: String, name: String = "song.flac") = JSONObject().put("fid", fid).put("filename", name).put("file_type", "1").put("size", 120).put("updated_at", 88)
     private fun page(files: JSONArray?, last: Boolean, cursor: JSONObject? = null, gap: Int = 0) = JSONObject().put("status", 0).put("metadata", JSONObject().put("tq_gap", gap)).put("data", JSONObject().put("file_list", files ?: JSONObject.NULL).put("last_page", last).apply { cursor?.let { put("next_query_cursor", it) }; put("total", 999999) }).toString()

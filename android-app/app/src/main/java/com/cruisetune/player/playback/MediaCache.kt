@@ -139,7 +139,13 @@ class MediaCache(private val app: CruiseApplication) {
         contentLength(track), streamLimitBytes, { hasRoom })
     fun keepOffline(track: Track) {
         if (track.localUri.isNotBlank()) throw UserError("这首音乐已经保存在本地")
-        if (!hasRoom || track.size > (stat.availableBytes - reserveBytes)) throw UserError("存储空间不足，请清理缓存后重试")
+        val available = (stat.availableBytes - reserveBytes).coerceAtLeast(0)
+        val length = contentLength(track)
+        val insufficient = if (length > 0) {
+            val remaining = (length - offline.getCachedBytes(track.cacheKey, 0, length)).coerceAtLeast(0)
+            remaining > available
+        } else available == 0L
+        if (insufficient) throw UserError("存储空间不足，请清理缓存后重试")
         val request = DownloadRequest.Builder(track.cacheKey, Uri.parse("cruisetune://track/${track.id}"))
             .setCustomCacheKey(track.cacheKey).setMimeType(track.mimeType).setData(track.title.toByteArray()).build()
         DownloadService.sendAddDownload(app, OfflineDownloadService::class.java, request, true)

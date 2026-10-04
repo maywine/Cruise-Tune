@@ -34,6 +34,7 @@ Gradle 自动生成 AIDL 等构建输入。单元测试使用 Robolectric、合�
 | --- | --- | --- |
 | `LibraryActionsDeviceTest` | 目录移除、排序与播放状态保留 | 无，运行时生成 |
 | `DeletedQuarkTrackDeviceTest` | 云端失效自动跳过、队列标记、普通错误保留当前歌曲、完整缓存播放 | 无，运行时生成 |
+| `GateRegressionDeviceTest` | Token 代次、PCM 预取门槛、离线续传的剩余空间判断 | 无，运行时生成 |
 | `PlayerDetailsDeviceTest` | 封面、同目录歌词与离线下载 | 基础 FLAC |
 | `QueueFollowDeviceTest` | 队列跟随与手动浏览 | 基础 FLAC |
 | `PlaybackOrderDeviceTest` | 顺序切换与播放连续性 | 基础 FLAC |
@@ -42,6 +43,8 @@ Gradle 自动生成 AIDL 等构建输入。单元测试使用 Robolectric、合�
 | `TrackTransitionDeviceTest` | 切歌后的封面与歌词归属 | 全部素材 |
 
 `DashboardStartupDeviceTest` 打开真实播放器界面，验证上次队列以暂停状态恢复，以及接收器稍晚就绪、熄屏／亮屏、手动重发、发送重试与取消、切歌和播放状态变化时的仪表同步。测试仅替换仪表接收器的发现与传输，不修改正式包的目标组件或权限检查。熄屏／亮屏通过注入对应回调验证，原车接收器与物理屏幕行为仍需实车确认。本地测试另检查没有开机接收器、开机权限或开机设置入口，遗留开关不会触发后台任务且不会被改写，打开应用时续播和普通队列恢复继续可用。
+
+`GateRegressionDeviceTest` 使用内存中的合成凭据，不访问真实网盘账号；在设备上直接执行 PCM 缓冲门槛策略，并通过稀疏文件构造已有大块离线缓存，验证继续下载仅检查缺失字节，不实际填满磁盘。运行环境须支持稀疏文件，用例结束后移除自己的缓存和下载记录；它不替代高采样率音频的完整解码与输出验证。
 
 ### 生成素材
 
