@@ -125,11 +125,10 @@ internal class DashboardSyncController(
         submit(listOf(input.snapshot), coalesce = false, force = force)
     }
 
-    /** Automatic startup resends must not override a terminal dispatch failure. */
-    fun requestResend(automatic: Boolean = false) {
+    /** Explicit user rechecks may retry snapshots rejected by the receiver. */
+    fun requestResend() {
         if (closed || !settings.enabled) return
-        if (automatic && (!pendingPlaybackRequested || latest?.snapshot?.let(EcarxMediaPayload::signature) == rejectedPendingSignature)) return
-        if (!automatic) rejectedPendingSignature = null
+        rejectedPendingSignature = null
         endpoint = null
         refreshEndpoint(force = true)
     }

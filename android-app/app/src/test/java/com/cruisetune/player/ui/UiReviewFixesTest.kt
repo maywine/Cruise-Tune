@@ -11,7 +11,6 @@ import com.cruisetune.player.CruiseApplication
 import com.cruisetune.player.R
 import com.cruisetune.player.ui.Design.dp
 import com.cruisetune.player.core.Track
-import com.cruisetune.player.startup.StartupSettings
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.Before
@@ -373,28 +372,40 @@ class UiReviewFixesTest {
             reduced.isChecked=true;shadowOf(Looper.getMainLooper()).idle();assertEquals(0,dialog.window!!.attributes.windowAnimations)
         } finally {controller.pause().stop().destroy()}
     }
-    @Test fun startupSettingIsVisibleAndPersists() {
+    @Test fun bootStartupIsRemovedButResumePlaybackAndVehicleSettingsRemain() {
         val app = RuntimeEnvironment.getApplication() as CruiseApplication
-        app.preferences.edit().remove(StartupSettings.ENABLED).commit()
+        app.preferences.edit().putBoolean("startup.enabled", true).putBoolean("resumeOnOpen", false).commit()
         val controller = Robolectric.buildActivity(MainActivity::class.java).create().start().resume().visible()
         try {
             val activity = controller.get()
             views(activity.window.decorView).filterIsInstance<TouchButton>().first { it.text.toString() == "设置" }.performClick()
             val dialog = ShadowDialog.getLatestDialog()
-            val startup = views(dialog.window!!.decorView).filterIsInstance<CalmSwitch>().single { it.text.toString() == "开机恢复播放器" }
-            assertFalse(startup.isChecked)
-            startup.isChecked = true
-            assertTrue(StartupSettings(app.preferences).enabled)
-            com.cruisetune.player.startup.StartupRestoreJobService.schedule(app)
+            val controls = views(dialog.window!!.decorView).filterIsInstance<TextView>().map { it.text.toString() }.toList()
+            assertFalse(controls.any { it.contains("开机") || it == "启动" })
+            assertTrue(controls.contains("仪表媒体显示"))
+            assertTrue(controls.contains("方向盘按键"))
+            assertTrue(controls.contains("自动缓存后 3 首"))
+            val resume = views(dialog.window!!.decorView).filterIsInstance<CalmSwitch>().single { it.text.toString() == "打开应用时继续播放" }
+            assertFalse(resume.isChecked)
+            resume.isChecked = true
+            assertTrue(app.preferences.getBoolean("resumeOnOpen", false))
+            assertTrue(app.preferences.getBoolean("startup.enabled", false))
             val scheduler = app.getSystemService(android.app.job.JobScheduler::class.java)
-            assertTrue(scheduler.allPendingJobs.isNotEmpty())
-            startup.isChecked = false
-            assertFalse(StartupSettings(app.preferences).enabled)
             assertTrue(scheduler.allPendingJobs.isEmpty())
-            assertTrue(StartupSettings(app.preferences).diagnostic().contains("开机恢复已关闭"))
         } finally {
-            app.preferences.edit().remove(StartupSettings.ENABLED).commit()
             controller.pause().stop().destroy()
+        }
+    }
+    @Test @Config(sdk = [28, 33]) fun manifestHasNoBootEntryOrBootPermission() {
+        val app = RuntimeEnvironment.getApplication() as CruiseApplication
+        val info = app.packageManager.getPackageInfo(app.packageName,
+            android.content.pm.PackageManager.GET_RECEIVERS or android.content.pm.PackageManager.GET_SERVICES or
+                android.content.pm.PackageManager.GET_PERMISSIONS)
+        assertFalse(info.requestedPermissions.orEmpty().contains(android.Manifest.permission.RECEIVE_BOOT_COMPLETED))
+        assertFalse(info.receivers.orEmpty().any { it.name.endsWith(".BootReceiver") })
+        assertFalse(info.services.orEmpty().any { it.name.endsWith(".StartupRestoreJobService") })
+        for (action in listOf(android.content.Intent.ACTION_BOOT_COMPLETED, "android.intent.action.QUICKBOOT_POWERON")) {
+            assertTrue(app.packageManager.queryBroadcastReceivers(android.content.Intent(action).setPackage(app.packageName), 0).isEmpty())
         }
     }
     @Test fun existingMusicDirectoriesPrecedeAccountAndLoginActions() {

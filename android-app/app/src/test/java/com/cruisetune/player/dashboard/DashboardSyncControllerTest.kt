@@ -138,7 +138,7 @@ class DashboardSyncControllerTest {
         controller.close()
     }
 
-    @Test fun automaticBootResendsDoNotRetryRejectedSnapshotsButManualRecheckCan() = runTest {
+    @Test fun pendingRejectionSurvivesIdleUpdatesAndWakeUntilManualRecheck() = runTest {
         val context = RuntimeEnvironment.getApplication() as Application
         val preferences = context.getSharedPreferences("dashboard-pending-rejected", Context.MODE_PRIVATE).apply {
             edit().clear().putBoolean(DashboardSettings.ENABLED, true).commit()
@@ -151,13 +151,12 @@ class DashboardSyncControllerTest {
             controller.onPendingPlayback(pending)
             advanceUntilIdle()
             assertEquals(1, transport.attempts)
-            for (waitMs in listOf(5_000L, 10_000L, 15_000L)) {
-                advanceTimeBy(waitMs)
+            repeat(3) {
+                advanceTimeBy(2_000L)
                 controller.onPendingPlayback(pending)
-                controller.requestResend(automatic = true)
                 advanceUntilIdle()
             }
-            assertEquals("A permanent failure must survive automatic boot resends", 1, transport.attempts)
+            assertEquals("A permanent failure must survive idle updates", 1, transport.attempts)
             controller.invalidate("熄屏")
             controller.onPendingPlayback(pending)
             advanceUntilIdle()

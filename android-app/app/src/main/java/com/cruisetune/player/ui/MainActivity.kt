@@ -43,9 +43,6 @@ import com.cruisetune.player.data.JsonCodec
 import com.cruisetune.player.playback.PlaybackService
 import com.cruisetune.player.steering.*
 import com.cruisetune.player.dashboard.*
-import com.cruisetune.player.startup.StartupNotice
-import com.cruisetune.player.startup.StartupSettings
-import com.cruisetune.player.startup.StartupRestoreJobService
 import com.cruisetune.player.ui.Design.dp
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.*
@@ -117,10 +114,7 @@ class MainActivity : CruiseActivity() {
     private var settingsDialog: AlertDialog? = null
     private var refreshingAppearance = false
 
-    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (!granted && app.preferences.getBoolean(StartupSettings.ENABLED, false))
-            toast("请在系统设置中允许 Cruise Tune 通知，否则开机入口无法显示")
-    }
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
     private val localDirectory = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri == null) return@registerForActivityResult
         try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -220,10 +214,6 @@ class MainActivity : CruiseActivity() {
                 }
             }
         }
-    }
-    override fun onResume() {
-        super.onResume()
-        StartupNotice.dismiss(this)
     }
     private fun buildScreen() {
         detailsBack.isEnabled=detailsExpanded
@@ -971,10 +961,6 @@ class MainActivity : CruiseActivity() {
         action(content,"封面与歌词") { dialog.dismiss();showTrackDetails() }
         toggle(content, "打开应用时继续播放", "resumeOnOpen", false)
         paragraph(content, "熄屏时自动暂停并保存进度，亮屏后点击继续播放。")
-        section(content,"启动")
-        toggle(content, "开机恢复播放器", StartupSettings.ENABLED, false)
-        paragraph(content, "开机后在后台恢复上次队列并保持暂停；开启仪表同步时发送待播放歌曲。点击通知打开界面，是否续播由上面的开关决定。通知入口需允许通知，后台恢复不依赖此权限。")
-        paragraph(content, StartupSettings(app.preferences).diagnostic())
         section(content,"车辆")
         action(content, "方向盘按键") { dialog.dismiss(); showSteeringSettings() }
         action(content, "仪表媒体显示") { dialog.dismiss(); showDashboardSettings() }
@@ -1117,7 +1103,7 @@ class MainActivity : CruiseActivity() {
         val recheck = action(content, "重新检查并发送") { command(PlaybackService.DASHBOARD_RECHECK) }
         fun diagnosticReport(): String {
             val version = packageManager.getPackageInfo(packageName, 0).versionName.orEmpty()
-            return app.dashboardStatus.value.diagnosticReport(version, Build.VERSION.SDK_INT) + "\n" + StartupSettings(app.preferences).diagnostic()
+            return app.dashboardStatus.value.diagnosticReport(version, Build.VERSION.SDK_INT)
         }
         val diagnostic = Design.label(this, "", 20f, Design.text).apply {
             setLineSpacing(dp(5).toFloat(), 1f)
@@ -1232,14 +1218,6 @@ class MainActivity : CruiseActivity() {
                 if (key in listOf("dayMode","highContrast","reduceTransparency")) refreshAppearance()
                 else if(key=="reduceMotion") {
                     panels.keys.toList().filter { it.isShowing }.forEach { Design.styleDialog(it,this@MainActivity) }
-                } else if (key == StartupSettings.ENABLED && checked && Build.VERSION.SDK_INT >= 33 &&
-                    ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-                ) {
-                    if (app.preferences.getBoolean("notificationAsked", false))
-                        toast("请在系统设置中允许 Cruise Tune 通知，否则开机入口无法显示")
-                    else askNotificationPermission()
-                } else if (key == StartupSettings.ENABLED && !checked) {
-                    StartupRestoreJobService.cancel(this@MainActivity)
                 }
             }
         }, LinearLayout.LayoutParams(-1, -2))

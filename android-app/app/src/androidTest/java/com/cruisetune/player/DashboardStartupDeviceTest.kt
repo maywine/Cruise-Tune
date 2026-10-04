@@ -1,8 +1,5 @@
 package com.cruisetune.player
 
-import android.app.Notification
-import android.app.NotificationManager
-import android.app.job.JobScheduler
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
@@ -21,9 +18,6 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.cruisetune.player.core.*
 import com.cruisetune.player.dashboard.*
 import com.cruisetune.player.playback.PlaybackService
-import com.cruisetune.player.startup.BootReceiver
-import com.cruisetune.player.startup.StartupSettings
-import com.cruisetune.player.startup.StartupRestoreJobService
 import com.cruisetune.player.ui.MainActivity
 import kotlinx.coroutines.*
 import org.junit.Assert.*
@@ -91,7 +85,7 @@ class DashboardStartupDeviceTest {
         }
     }
 
-    @Test fun bootRestorePublishesPausedSongAndHandlesLateReceiverRetriesAndPlayback() {
+    @Test fun openingPlayerPublishesPausedSongAndHandlesLateReceiverRetriesAndPlayback() {
         check(app.packageName.endsWith(".authcheck")) { "Use the isolated validation application" }
         check(app.database.sources().isEmpty() && app.database.restore().entries.isEmpty()) { "Use an empty test library and queue" }
         val file = File.createTempFile("dashboard-startup-", ".flac", app.cacheDir).apply {
@@ -100,12 +94,8 @@ class DashboardStartupDeviceTest {
         val source = MusicSource("dashboard-startup", SourceKind.LOCAL, "Synthetic dashboard songs", "test-only")
         val tracks = (0..2).map { Track("dashboard-$it", source.id, "file-$it", "Pending song $it", artist = "Synthetic artist",
             localUri = file.toURI().toString(), mimeType = "audio/flac", size = file.length(), durationMs = 60_000) }
-        val keys = listOf(StartupSettings.ENABLED, DashboardSettings.ENABLED, "resumeOnOpen", "prefetchNextTracks")
+        val keys = listOf(DashboardSettings.ENABLED, "resumeOnOpen", "prefetchNextTracks")
         val previous = keys.associateWith { key -> if (app.preferences.contains(key)) app.preferences.getBoolean(key, false) else null }
-        val diagnosticKeys = listOf("startup.receivedAt", "startup.result", "startup.attempts",
-            "startup.bootEventAt", "startup.bootAction", "startup.enabledAtBoot", "startup.attemptAt",
-            "startup.stage", "startup.stageAt", "startup.dashboardRecord", "startup.dashboardAt")
-        val previousDiagnostics = diagnosticKeys.associateWith { app.preferences.all[it] }
         val transport = TestTransport(app)
         val received = CopyOnWriteArrayList<Intent>()
         val receiver = object : BroadcastReceiver() {
@@ -116,22 +106,15 @@ class DashboardStartupDeviceTest {
         var activity: MainActivity? = null
         var controller: MediaController? = null
         var playback: PlaybackService? = null
-        val monitor = instrument.addMonitor(MainActivity::class.java.name, null, false)
         ContextCompat.registerReceiver(app, receiver, IntentFilter(EcarxBroadcastTransport.ACTION), ContextCompat.RECEIVER_NOT_EXPORTED)
         try {
             app.database.saveSource(source); app.database.replaceScan(source.id, tracks)
             app.database.saveQueue(PlaybackSnapshot(1, tracks.mapIndexed { index, track -> QueueEntry(track, index) }, 1, 12_345))
-            app.preferences.edit().putBoolean(StartupSettings.ENABLED, true).putBoolean(DashboardSettings.ENABLED, true)
+            app.preferences.edit().putBoolean(DashboardSettings.ENABLED, true)
                 .putBoolean("resumeOnOpen", false).putBoolean("prefetchNextTracks", false).commit()
-            // Simulate delivery of BOOT_COMPLETED without rebooting or modifying the shared device.
-            main { BootReceiver().onReceive(app, Intent(Intent.ACTION_BOOT_COMPLETED)) }
-            val notifications = app.getSystemService(NotificationManager::class.java)
-            await("Enabled boot receiver must offer the player notification") {
-                notifications.activeNotifications.any { it.notification.extras.getCharSequence(Notification.EXTRA_TITLE) == "Cruise Tune 播放器" }
-            }
-            // No Activity or observer connection may create the player before this assertion.
-            await("The scheduled boot job must create the playback session without opening the UI") { session() != null }
-            assertEquals("The notification has not been tapped", 0, monitor.hits)
+            activity = instrument.startActivitySync(Intent(app, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+            await("Opening the player must create the playback session") { session() != null }
             lateinit var future: com.google.common.util.concurrent.ListenableFuture<MediaController>
             main { future = MediaController.Builder(app, SessionToken(app, ComponentName(app, PlaybackService::class.java))).buildAsync() }
             val c = future.get(10, TimeUnit.SECONDS); controller = c
@@ -173,24 +156,8 @@ class DashboardStartupDeviceTest {
             assertEquals(2, first.getIntExtra("RECEIVER_MEDIA_PLAY_STATUS", -1))
             assertEquals(12_345L, first.getLongExtra("RECEIVER_MEDIA_CURRENT_POSITION", -1))
             assertEquals(EcarxBroadcastTransport.component, transport.dispatched.single().component)
-            assertEquals("Song must be published before opening MainActivity", 0, monitor.hits)
-            await("Boot diagnostics must persist the actual asynchronous dispatch") {
-                StartupSettings(app.preferences).diagnostic().contains("记录时本进程已发送 1 次（无接收回执）")
-            }
-            assertTrue(StartupSettings(app.preferences).diagnostic().contains("仪表启动同步窗口"))
-            // The real boot connection has done its work; subsequent checks exercise controller policy.
-            app.getSystemService(JobScheduler::class.java).cancel(StartupRestoreJobService.JOB_ID)
-            main {
-                val notice = notifications.activeNotifications.single {
-                    it.notification.extras.getCharSequence(Notification.EXTRA_TITLE) == "Cruise Tune 播放器"
-                }
-                checkNotNull(notice.notification.contentIntent).send()
-            }
-            activity = instrument.waitForMonitorWithTimeout(monitor, 10_000) as? MainActivity
-            assertNotNull("Notification must still open the restored player", activity)
             SystemClock.sleep(4_200)
             assertEquals(1, received.size); assertPending()
-            val bootRecord = app.preferences.getString("startup.dashboardRecord", null)
             command(PlaybackService.DASHBOARD_RECHECK)
             await("Manual resend must work while paused") { received.size == 2 }
 
@@ -246,20 +213,12 @@ class DashboardStartupDeviceTest {
             await("Pause must publish paused state") { !engine.playWhenReady && received.last().getIntExtra("RECEIVER_MEDIA_PLAY_STATUS", -1) == 2 }
             command(PlaybackService.REMOVE_SOURCE, Bundle().apply { putString("sourceId", source.id) })
             await("Fixture queue must be removed") { engine.mediaItemCount == 0 }
-            assertEquals("Later playback must not overwrite boot evidence", bootRecord, app.preferences.getString("startup.dashboardRecord", null))
         } finally {
-            app.getSystemService(JobScheduler::class.java).cancel(StartupRestoreJobService.JOB_ID)
             main { controller?.pause(); dashboard?.close(); scope.cancel(); controller?.release(); activity?.finish() }
             app.stopService(Intent(app, PlaybackService::class.java))
             runBlocking { app.library.removeSources(setOf(source.id), PlaybackSnapshot()) }
             app.preferences.edit().apply { previous.forEach { (key, value) -> if (value == null) remove(key) else putBoolean(key, value) } }.commit()
-            app.preferences.edit().apply {
-                previousDiagnostics.forEach { (key, value) ->
-                    when (value) { is Long -> putLong(key, value); is Int -> putInt(key, value); is String -> putString(key, value); is Boolean -> putBoolean(key, value); else -> remove(key) }
-                }
-            }.commit()
             app.unregisterReceiver(receiver)
-            instrument.removeMonitor(monitor)
             file.delete()
         }
     }

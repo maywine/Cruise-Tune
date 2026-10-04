@@ -7,7 +7,6 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <queries>
         <package android:name="com.geely.service.oneosapi" />
@@ -38,13 +37,6 @@
         </service>
         <service android:name=".playback.OfflineDownloadService" android:exported="false" android:foregroundServiceType="dataSync" />
         <service android:name=".steering.SteeringBridgeService" android:exported="false" android:process=":steering" />
-        <service android:name=".startup.StartupRestoreJobService" android:exported="true" android:permission="android.permission.BIND_JOB_SERVICE" />
-        <receiver android:name=".startup.BootReceiver" android:exported="false">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
-            </intent-filter>
-        </receiver>
         <receiver android:name="androidx.media3.session.MediaButtonReceiver" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MEDIA_BUTTON" /></intent-filter>
         </receiver>
