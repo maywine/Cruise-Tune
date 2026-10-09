@@ -82,6 +82,8 @@ class StartupPlaybackTest {
     }
 
     private inner class Fixture : AutoCloseable {
+        private val savedPositionMs = app.database.restore().positionMs
+        private var openedAtMs = 0L
         val service: ServiceController<PlaybackService> = Robolectric.buildService(PlaybackService::class.java).create()
         val player: ExoPlayer = ReflectionHelpers.getField(service.get(), "player")
         var activity: ActivityController<MainActivity>? = null
@@ -99,6 +101,7 @@ class StartupPlaybackTest {
         }
 
         fun open(savedState: Bundle? = null) {
+            openedAtMs = SystemClock.elapsedRealtime()
             activity = Robolectric.buildActivity(MainActivity::class.java).create(savedState).start().resume().visible()
             settleStartup()
         }
@@ -128,7 +131,12 @@ class StartupPlaybackTest {
                     "position=${player.currentPosition}, error=${player.playerError}, playChanges=$playChanges"
             }) { player.isPlaying }
             assertEquals("startup-1", player.currentMediaItem?.mediaId)
-            assertEquals(12_345L, player.currentPosition)
+            // Audio can advance before the controller and UI finish connecting. Bound it by
+            // elapsed time instead of assuming the requested start position is still current.
+            val position = player.currentPosition
+            val elapsed = SystemClock.elapsedRealtime() - openedAtMs
+            assertTrue("Playback must resume at $savedPositionMs and advance by at most $elapsed ms, was $position",
+                position in savedPositionMs..(savedPositionMs + elapsed))
             assertEquals(Player.REPEAT_MODE_ALL, player.repeatMode)
             assertEquals(listOf("startup-0", "startup-1"), (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId })
             assertNull(player.playerError)
@@ -164,6 +172,15 @@ class StartupPlaybackTest {
 
     @Test fun coldStartupWithRestoredActivityStateStillPlays() {
         Fixture().use { f -> f.open(Bundle().apply { putBoolean("queue", true) }); f.assertPlayingAtSavedPosition() }
+    }
+
+    @Test fun startupPositionAllowsAudioToAdvanceBeforeItIsObserved() {
+        StartupAudioTrack.advanceWithClock = true
+        Fixture().use { f ->
+            f.open()
+            await("Startup audio must have advanced before checking restoration") { f.player.isPlaying && f.player.currentPosition > 12_345L }
+            f.assertPlayingAtSavedPosition()
+        }
     }
 
     @Test fun disabledAutoplayRestoresWithoutPreparingEvenWhenPreviouslyPlaying() {
