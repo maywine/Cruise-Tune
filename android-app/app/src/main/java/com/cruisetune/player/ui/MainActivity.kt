@@ -172,7 +172,8 @@ class MainActivity : CruiseActivity() {
                             if (events.containsAny(Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_REPEAT_MODE_CHANGED)) onQueueChanged(player.mediaItemCount)
                         }
                     })
-                    if (savedInstanceState == null) command(PlaybackService.RESUME_ON_OPEN)
+                    // A cold process can restore an activity Bundle; the service owns the once-per-start decision.
+                    command(PlaybackService.RESUME_ON_OPEN)
                     renderPlayer(); onQueueChanged(c.mediaItemCount)
                 }.onFailure { toast("播放器暂时无法启动，请重新打开应用") }
             }, ContextCompat.getMainExecutor(this))
@@ -959,7 +960,8 @@ class MainActivity : CruiseActivity() {
     private fun populateSettings(dialog: AlertDialog, content: LinearLayout) {
         section(content,"播放")
         action(content,"封面与歌词") { dialog.dismiss();showTrackDetails() }
-        toggle(content, "打开应用时继续播放", "resumeOnOpen", false)
+        toggle(content, "启动时自动播放", "resumeOnOpen", false)
+        paragraph(content, "启动应用后，从上次歌曲和进度继续播放。")
         paragraph(content, "熄屏时自动暂停并保存进度，亮屏后点击继续播放。")
         section(content,"车辆")
         action(content, "方向盘按键") { dialog.dismiss(); showSteeringSettings() }

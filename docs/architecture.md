@@ -33,9 +33,11 @@ FLAC 默认通过官方 Media3 扩展和 libFLAC 1.5.0 解码成 PCM，再交给
 
 播放中每 2 秒以及切歌、跳转、暂停、模式变化等关键事件保存状态。歌曲、位置、队列和播放意图一致提交；数据库使用 SQLite WAL 与 FULL 同步，保留上一份有效快照。不要依赖 onDestroy 或关机广播完成最后一次保存。
 
-打开应用先恢复信息与位置，默认等待用户继续。熄屏时清除播放意图，即使开启自动续播，下一次亮屏也不会自行恢复。进程结束与物理断电不同，不能把模拟器采样差当作最大断电误差保证。依据：[Android 生命周期](https://developer.android.com/guide/components/activities/activity-lifecycle)、[SQLite synchronous](https://www.sqlite.org/pragma.html#pragma_synchronous)、[Media3 后台播放](https://developer.android.com/media/media3/session/background-playback)。
+打开应用先恢复信息与位置，默认等待用户继续。开启“启动时自动播放”后，有已保存队列且屏幕可交互时从上次位置播放，不要求上次保存的播放意图为播放。启动请求由主界面连接播放器后发出，每次播放服务运行期间只处理一次；进程重启后即使恢复了旧界面状态也会处理，界面重建、切到其他 App 再返回不会重复触发。使用中更改开关在下一次启动生效。
 
-应用不注册开机广播，也不安排开机恢复任务。手动打开后的队列恢复、独立的“打开应用时继续播放”开关，以及仪表媒体同步照常工作；不额外迁移或清理旧设置和应用数据。
+熄屏时暂停并清除播放意图，单纯亮屏不会自行恢复，也不会保留等待亮屏执行的启动播放请求；下次重新启动应用仍按开关决定是否播放。进程结束与物理断电不同，不能把模拟器采样差当作最大断电误差保证。依据：[Android 生命周期](https://developer.android.com/guide/components/activities/activity-lifecycle)、[SQLite synchronous](https://www.sqlite.org/pragma.html#pragma_synchronous)、[Media3 后台播放](https://developer.android.com/media/media3/session/background-playback)。
+
+应用不注册开机广播，也不安排开机恢复任务。自动播放沿用原“打开应用时继续播放”开关的设置值，仪表媒体同步照常工作；不额外迁移或清理旧设置和应用数据。
 
 ## 数据保留与清理
 

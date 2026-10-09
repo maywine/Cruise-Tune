@@ -385,7 +385,8 @@ class UiReviewFixesTest {
             assertTrue(controls.contains("仪表媒体显示"))
             assertTrue(controls.contains("方向盘按键"))
             assertTrue(controls.contains("自动缓存后 3 首"))
-            val resume = views(dialog.window!!.decorView).filterIsInstance<CalmSwitch>().single { it.text.toString() == "打开应用时继续播放" }
+            assertTrue(controls.contains("启动应用后，从上次歌曲和进度继续播放。"))
+            val resume = views(dialog.window!!.decorView).filterIsInstance<CalmSwitch>().single { it.text.toString() == "启动时自动播放" }
             assertFalse(resume.isChecked)
             resume.isChecked = true
             assertTrue(app.preferences.getBoolean("resumeOnOpen", false))

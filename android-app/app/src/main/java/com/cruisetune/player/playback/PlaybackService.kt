@@ -53,6 +53,7 @@ class PlaybackService : MediaLibraryService() {
     private var queueSort: TrackSort? = null
     private var applying = false
     private var persistedIntent = false
+    private var startupPlaybackHandled = false
     private var screenOffObserved = false
     private var restoredDashboardTrackId: String? = null
     private lateinit var screenOff: ScreenOffMonitor
@@ -218,7 +219,7 @@ class PlaybackService : MediaLibraryService() {
     }
     private fun syncDashboard(tick: Boolean = false) {
         if (!::dashboard.isInitialized || !ready.isCompleted) return
-        // Queue restoration stays IDLE until the user plays. Keep its publication eligible
+        // Queue restoration stays IDLE until playback is requested. Keep its publication eligible
         // across player callbacks and ticks while the vehicle receiver is starting up.
         if (player.currentMediaItem?.mediaId != restoredDashboardTrackId || player.playWhenReady ||
             player.playbackState != Player.STATE_IDLE || player.playerError != null) restoredDashboardTrackId = null
@@ -623,7 +624,14 @@ class PlaybackService : MediaLibraryService() {
                     PLAY_TRACK -> playTrack(args.getString("trackId") ?: "", args.getString("sourceId"))
                     SHUFFLE -> toggleShuffle()
                     SORT_QUEUE -> sortQueue(TrackSort.fromPreference(args.getString("sort")))
-                    RESUME_ON_OPEN -> if (app.preferences.getBoolean("resumeOnOpen", false) && persistedIntent && entries.isNotEmpty()) { prepareAndPlay() }
+                    RESUME_ON_OPEN -> if (!startupPlaybackHandled) {
+                        // The activity can reconnect after recreation. Consume even disabled or
+                        // screen-off startup requests so a later connection cannot undo a pause.
+                        startupPlaybackHandled = true
+                        if (app.preferences.getBoolean("resumeOnOpen", false) && entries.isNotEmpty() && !player.playWhenReady) {
+                            prepareAndPlay()
+                        }
+                    }
                     REMOVE_SOURCE -> removeSources(setOf(args.getString("sourceId") ?: throw UserError("请选择要移除的目录")))
                     DISCONNECT_TOKEN -> {
                         val account = args.getString("accountId") ?: throw UserError("请选择要移除的账号")
